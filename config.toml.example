@@ -1,0 +1,87 @@
+# Copy to config.toml and edit. Paths may be relative to this directory.
+
+[club]
+# Which club to join. Must match a folder in clubs/. Copy clubs/academic/ to start another.
+id = "academic"
+# libp2p listen port (gossip). Distinct from the Bitswap sniffer.
+listen_port = 4713
+# Local HTTP API for publish / identity. Distinct from web UI.
+api_host = "127.0.0.1"
+api_port = 8003
+# Optional multiaddrs of other Observers, e.g. /ip4/203.0.113.8/tcp/4713/p2p/<peer-id>
+bootstrap_peers = []
+identity_path = "data/identity.key"
+# Catalog and inbox default to data/<id>/. Set only to override.
+# inbox_dir = "data/academic/inbox"
+# db_path = "data/academic/club.sqlite"
+# Catch-up + anti-flood. Gossip is still signed; these only bound the overlay.
+max_msgs_per_peer_per_min = 60
+inbox_max_bytes = 67108864
+inbox_keep_days = 7
+snapshot_limit = 20000
+# LAN discovery of other Observers. bootstrap_peers is still the invited join path.
+mdns = true
+# Work-claim lease before an LLM call.
+claim_ttl_seconds = 900
+
+[web]
+# Search UI. 0.0.0.0 is reachable on the LAN. Keep clubd API on localhost.
+host = "0.0.0.0"
+port = 8002
+
+[sniffer]
+# Passive Bitswap WANT listener. Never requests or serves content.
+listen_port = 4712
+low_connections = 50
+high_connections = 80
+discovery_interval_seconds = 30
+spool_dir = "data/spool"
+
+[fetch]
+# Optional local Kubo. Tried before public gateways; leave empty if none.
+ipfs_api = ""
+gateways = [
+    "https://trustless-gateway.link",
+    "https://ipfs.io",
+    "https://w3s.link",
+]
+max_bytes = 2097152
+max_pdf_bytes = 8388608
+max_child_blocks = 6
+timeout_seconds = 10
+connect_timeout_seconds = 5
+request_timeout_seconds = 10
+rate_limit_kbps = 1500
+# Fetch workers. Several classifier hosts can be active at once (/admin).
+concurrency = 16
+min_peer_count = 1
+# Prefer CIDs wanted by this many peers; fall back to min_peer_count.
+prefer_min_peer_count = 2
+# Sniffed dag-pb (UnixFS folders) is not queued. Reports can still enqueue one.
+max_retries = 1
+max_timeout_retries = 1
+min_age_seconds = 10
+# Only fetch recently sniffed CIDs. Older WANTs are usually gone.
+max_age_seconds = 900
+max_queue = 400
+# Local unprocessable skips expire so a later sighting can retry.
+skip_ttl_seconds = 21600
+
+[storage]
+work_db = "data/work.sqlite"
+max_db_size_mb = 2048
+min_free_disk_mb = 10240
+janitor_interval_seconds = 30
+
+[control]
+# Pause Bitswap when the live queue hits fetch.max_queue; resume here.
+backlog_low = 200
+check_interval_seconds = 30
+
+[llm]
+# Seed for LM Studio. Switch or add OpenAI-compatible hosts in /admin (Classifier).
+# Remote API keys are stored in data/llm.json, not here.
+base_url = "http://127.0.0.1:1234/v1"
+model = "gemma-4-12b-it-qat"
+timeout_seconds = 120
+max_text_chars = 3000

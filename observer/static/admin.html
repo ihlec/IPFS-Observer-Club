@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPFS Observer — Admin</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+  <h1>Admin</h1>
+  <div class="meta-line">
+    <button type="button" class="disclosure" id="statsToggle" onclick="toggleStats()">[ Stats ]</button>
+    <span id="metaBits">This node</span>
+    <a href="/">[ Search ]</a>
+  </div>
+  <div class="stats-row" id="statCards"></div>
+
+  <div class="section" id="authWait">
+    <p class="hint">Checking admin access…</p>
+  </div>
+
+  <div class="section" id="loginSection" hidden>
+    <h3>Log in</h3>
+    <p class="hint">This node has an admin password. Sign in to use admin features.</p>
+    <div class="row">
+      <div style="flex:1;min-width:12em">
+        <input type="password" id="loginPassword" autocomplete="current-password" placeholder="password" onkeydown="if(event.key==='Enter')login()">
+      </div>
+      <button type="button" class="btn btn-search" id="loginBtn" onclick="login()">Log in</button>
+    </div>
+    <div class="status" id="loginStatus"></div>
+  </div>
+
+  <div class="section" id="passwordSection" hidden>
+    <h3>Admin password</h3>
+    <p class="hint" id="passwordHint">No password is set. Writes are localhost-only. Setting one stores a salted hash, not the password.</p>
+    <div class="row" id="currentPasswordRow" hidden>
+      <div style="flex:1;min-width:12em">
+        <input type="password" id="currentPassword" autocomplete="current-password" placeholder="current password">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:1;min-width:12em">
+        <input type="password" id="newPassword" autocomplete="new-password" placeholder="new password" onkeydown="if(event.key==='Enter')savePassword()">
+      </div>
+      <button type="button" class="btn btn-search" id="savePassword" onclick="savePassword()">Set password</button>
+      <button type="button" class="btn" id="clearPassword" hidden onclick="clearPassword()">Remove password</button>
+      <button type="button" class="btn" id="logoutBtn" hidden onclick="logout()">Log out</button>
+    </div>
+    <div class="status" id="passwordStatus"></div>
+  </div>
+
+  <div id="adminFeatures" hidden>
+  <div class="section">
+    <h3>Club</h3>
+    <p class="hint">One process joins one club. Saving writes <code>club.id</code> in config.toml. Restart to switch catalog and gossip.</p>
+    <p class="hint" id="clubNow">Joined: Academic</p>
+    <div class="row">
+      <select id="club" style="width:auto;min-width:16em"></select>
+      <button type="button" class="btn btn-search" id="saveClub" onclick="saveClub()">Save club</button>
+    </div>
+    <div class="status" id="clubStatus"></div>
+  </div>
+
+  <div class="section">
+    <h3>Classifier</h3>
+    <p class="hint">Save and use adds a backend. Stop using removes only the selected one. Groq and Academic Cloud can run at the same time. Each has its own rate limit.</p>
+    <p class="hint" id="llmNow">Using: Local</p>
+    <div class="row" id="llmToggles">
+      <button type="button" class="btn" data-llm="lmstudio" onclick="pickLlm('lmstudio')">Local</button>
+      <button type="button" class="btn" data-llm="academiccloud" onclick="pickLlm('academiccloud')">Academic Cloud</button>
+      <button type="button" class="btn" data-llm="groq" onclick="pickLlm('groq')">Groq</button>
+    </div>
+    <p class="field-label">API</p>
+    <input type="text" id="llmUrl" placeholder="https://…/v1" autocomplete="off" oninput="syncLlmButton()">
+    <p class="field-label">Model</p>
+    <input type="text" id="llmModel" placeholder="model id" autocomplete="off" oninput="syncLlmButton()">
+    <p class="field-label">API key</p>
+    <input type="password" id="llmKey" placeholder="not required for Local" autocomplete="off" oninput="syncLlmButton()">
+    <div class="row" style="margin-top:12px">
+      <button type="button" class="btn btn-search" id="saveLlm" onclick="llmAction()">Save and use</button>
+    </div>
+    <div class="status" id="llmStatus"></div>
+  </div>
+
+  <div class="section">
+    <h3>Node alias</h3>
+    <p class="hint">Shown next to this node’s peer ID in Observer Ranking. Gossiped to the club. 32 characters or fewer.</p>
+    <p class="hint" id="peerId">Node ID: —</p>
+    <div class="row">
+      <div class="input-wrap" style="flex:1;min-width:0">
+        <input type="text" id="alias" maxlength="32" placeholder="e.g. berlin-lab">
+      </div>
+      <button type="button" class="btn btn-search" id="saveAlias" onclick="saveAlias()">Save alias</button>
+    </div>
+    <div class="status" id="aliasStatus"></div>
+  </div>
+
+  <div class="section">
+    <h3>Guest reports</h3>
+    <p class="hint">Suggestions from the public search UI. Accept publishes this node’s report. Reject drops it.</p>
+    <div id="proposalList"><div class="empty">none</div></div>
+    <div class="status" id="proposalStatus"></div>
+  </div>
+
+  <div class="section">
+    <h3>Abusive reports</h3>
+    <p class="hint">Hidden from search. Restore takes back this node’s abusive report. Wrong classification asks other nodes to classify instead. Blacklist drops that node’s events on this machine only.</p>
+    <div id="abusiveList"><div class="empty">none</div></div>
+    <div class="status" id="abusiveStatus"></div>
+  </div>
+
+  <div class="section">
+    <h3>Blacklisted nodes</h3>
+    <p class="hint">This node ignores classify, skip, claim, alias, and report from these publishers.</p>
+    <div id="blacklistList"><div class="empty">none</div></div>
+    <div class="status" id="blacklistStatus"></div>
+  </div>
+  </div>
+</div>
+<script>
+let authState = {password_set: false, authenticated: false, ready: false};
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function canAdmin() {
+  return !authState.password_set || authState.authenticated;
+}
+function applyAuth(d) {
+  authState = {
+    password_set: !!d.password_set,
+    authenticated: !!d.authenticated,
+    ready: true,
+  };
+  const locked = authState.password_set;
+  const ok = canAdmin();
+  document.getElementById('authWait').hidden = true;
+  document.getElementById('loginSection').hidden = !locked || ok;
+  document.getElementById('passwordSection').hidden = locked && !ok;
+  document.getElementById('adminFeatures').hidden = !ok;
+  document.getElementById('currentPasswordRow').hidden = !locked;
+  document.getElementById('clearPassword').hidden = !locked || !ok;
+  document.getElementById('logoutBtn').hidden = !locked || !ok;
+  document.getElementById('savePassword').textContent = locked ? 'Change password' : 'Set password';
+  document.getElementById('passwordHint').textContent = locked
+    ? 'Password is stored as a salted hash. Changing it signs you in again; removing it returns to localhost-only admin.'
+    : 'No password is set. Writes are localhost-only. Setting one stores a salted hash, not the password.';
+}
+async function api(url, opts) {
+  const res = await fetch(url, {credentials: 'include', ...opts});
+  let d = {};
+  try { d = await res.json(); } catch (e) {}
+  const gate = url.startsWith('/api/admin/login') || url.startsWith('/api/admin/password');
+  if (res.status === 401 && authState.password_set && !gate) {
+    applyAuth({password_set: true, authenticated: false});
+  }
+  return {res, d};
+}
+async function loadAuth() {
+  try {
+    const {d} = await api('/api/admin/status');
+    applyAuth(d);
+  } catch (e) {
+    applyAuth({password_set: false, authenticated: false});
+  }
+  return canAdmin();
+}
+async function login() {
+  const status = document.getElementById('loginStatus');
+  const btn = document.getElementById('loginBtn');
+  status.className = 'status';
+  status.textContent = 'Signing in…';
+  btn.disabled = true;
+  try {
+    const {res, d} = await api('/api/admin/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: document.getElementById('loginPassword').value}),
+    });
+    if (!res.ok) {
+      status.className = 'status err';
+      status.textContent = d.detail || 'login failed';
+      return;
+    }
+    document.getElementById('loginPassword').value = '';
+    applyAuth(d);
+    status.className = 'status ok';
+    status.textContent = '';
+    loadClub();
+    loadAlias();
+    loadLlm();
+    loadAbusive();
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'login failed';
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function logout() {
+  await api('/api/admin/logout', {method: 'POST'});
+  applyAuth({password_set: true, authenticated: false});
+  document.getElementById('loginStatus').textContent = '';
+}
+async function savePassword() {
+  const status = document.getElementById('passwordStatus');
+  const btn = document.getElementById('savePassword');
+  status.className = 'status';
+  status.textContent = 'Saving…';
+  btn.disabled = true;
+  try {
+    const {res, d} = await api('/api/admin/password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        password: document.getElementById('newPassword').value,
+        current: document.getElementById('currentPassword').value,
+      }),
+    });
+    if (!res.ok) {
+      status.className = 'status err';
+      status.textContent = d.detail || 'save failed';
+      return;
+    }
+    document.getElementById('newPassword').value = '';
+    document.getElementById('currentPassword').value = '';
+    applyAuth(d);
+    status.className = 'status ok';
+    status.textContent = 'password saved';
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'save failed';
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function clearPassword() {
+  const status = document.getElementById('passwordStatus');
+  status.className = 'status';
+  status.textContent = 'Removing…';
+  try {
+    const {res, d} = await api('/api/admin/password/clear', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({current: document.getElementById('currentPassword').value}),
+    });
+    if (!res.ok) {
+      status.className = 'status err';
+      status.textContent = d.detail || 'remove failed';
+      return;
+    }
+    document.getElementById('newPassword').value = '';
+    document.getElementById('currentPassword').value = '';
+    applyAuth(d);
+    status.className = 'status ok';
+    status.textContent = 'password removed · localhost-only again';
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'remove failed';
+  }
+}
+function statCard(value, label) {
+  return `<div class="stat-card"><div class="stat-value">${esc(value)}</div><div class="stat-label">${esc(label)}</div></div>`;
+}
+function toggleStats() {
+  const row = document.getElementById('statCards');
+  const btn = document.getElementById('statsToggle');
+  row.classList.toggle('open');
+  btn.classList.toggle('open');
+}
+async function loadStats() {
+  try {
+    const s = await fetch('/api/stats').then(r => r.json());
+    const w = s.work || {};
+    const club = (s.club && (s.club.name || s.club.id)) || '—';
+    const gate = authState.password_set ? 'password required' : 'localhost only';
+    const model = [s.llm_name, s.model].filter(Boolean).join(' · ') || '—';
+    document.getElementById('metaBits').textContent =
+      `Club: ${club} · ${model} · ${gate}`;
+    document.getElementById('statCards').innerHTML =
+      statCard((w.backlog||0).toLocaleString(), 'queue') +
+      statCard((w.discovered||0).toLocaleString(), 'discovered') +
+      statCard((w.processing||0).toLocaleString(), 'processing') +
+      statCard((s.classifies||0).toLocaleString(), 'classified') +
+      statCard(s.llm ? 'up' : 'down', 'llm');
+  } catch (e) {}
+}
+async function loadAlias() {
+  try {
+    const {d} = await api('/api/alias');
+    document.getElementById('alias').value = d.alias || '';
+    document.getElementById('peerId').textContent =
+      'Node ID: ' + (d.peer_id || '—');
+  } catch (e) {}
+}
+async function saveAlias() {
+  const status = document.getElementById('aliasStatus');
+  const btn = document.getElementById('saveAlias');
+  status.className = 'status';
+  status.textContent = 'Saving…';
+  btn.disabled = true;
+  try {
+    const {res, d} = await api('/api/alias', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias: document.getElementById('alias').value }),
+    });
+    if (!res.ok) {
+      status.className = 'status err';
+      status.textContent = d.detail || d.error || 'save failed';
+      return;
+    }
+    document.getElementById('alias').value = d.alias || '';
+    if (d.peer_id) {
+      document.getElementById('peerId').textContent = 'Node ID: ' + d.peer_id;
+    }
+    status.className = 'status ok';
+    status.textContent = d.published
+      ? 'saved and gossiped'
+      : 'saved locally · clubd did not publish';
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'save failed';
+  } finally {
+    btn.disabled = false;
+  }
+}
+function showClub(d) {
+  const cur = d.current || {};
+  const label = cur.name || cur.id || '—';
+  let line = 'Joined: ' + label;
+  if (d.restart_needed) line += ' · next start: ' + (d.next || '');
+  if (d.env_locked) line += ' · locked by OBSERVER_CLUB_ID';
+  document.getElementById('clubNow').textContent = line;
+  const sel = document.getElementById('club');
+  const pick = d.next || cur.id || 'academic';
+  const clubs = d.clubs || [];
+  sel.innerHTML = clubs.map(c =>
+    `<option value="${esc(c.id)}">${esc(c.name || c.id)}</option>`
+  ).join('');
+  sel.value = pick;
+  document.getElementById('saveClub').disabled = !!d.env_locked;
+}
+async function loadClub() {
+  try {
+    const {res, d} = await api('/api/clubs');
+    if (res.ok) showClub(d);
+  } catch (e) {}
+}
+async function saveClub() {
+  const status = document.getElementById('clubStatus');
+  const btn = document.getElementById('saveClub');
+  status.className = 'status';
+  status.textContent = 'Saving…';
+  btn.disabled = true;
+  try {
+    const {res, d} = await api('/api/clubs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: document.getElementById('club').value }),
+    });
+    if (!res.ok) {
+      status.className = 'status err';
+      status.textContent = d.detail || d.error || 'save failed';
+      return;
+    }
+    showClub(d);
+    status.className = 'status ok';
+    status.textContent = d.restart_needed
+      ? 'saved · run make stop && make start to join ' + d.next
+      : 'already on this club';
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'save failed';
+  } finally {
+    btn.disabled = false;
+    loadClub();
+  }
+}
+let llmState = {active: 'lmstudio', providers: []};
+let llmSelected = 'lmstudio';
+const LLM_DEFAULTS = {
+  lmstudio: {name: 'Local', base_url: 'http://127.0.0.1:1234/v1', model: ''},
+  academiccloud: {name: 'Academic Cloud', base_url: 'https://chat-ai.academiccloud.de/v1', model: 'qwen3.6-35b-a3b'},
+  groq: {name: 'Groq', base_url: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-20b'},
+};
+
+function llmProvider(id) {
+  return (llmState.providers || []).find(p => p.id === id) || {};
+}
+function llmDefaults(id) {
+  const p = llmProvider(id);
+  const stock = LLM_DEFAULTS[id] || {};
+  return {
+    name: p.name || stock.name || id,
+    base_url: p.default_base_url || stock.base_url || '',
+    model: p.default_model || stock.model || '',
+    needs_key: p.needs_key,
+    has_key: p.has_key,
+  };
+}
+function llmActiveIds() {
+  if (Array.isArray(llmState.active_ids) && llmState.active_ids.length) {
+    return llmState.active_ids;
+  }
+  return llmState.active ? [llmState.active] : [];
+}
+function llmInUse(id) {
+  return llmActiveIds().includes(id);
+}
+function fillLlmFields(id) {
+  const d = llmDefaults(id);
+  document.getElementById('llmUrl').value = d.base_url;
+  document.getElementById('llmModel').value = d.model;
+  const key = document.getElementById('llmKey');
+  key.value = '';
+  key.placeholder = d.has_key ? 'unchanged' : (d.needs_key ? 'required' : 'not required for Local');
+}
+function markLlmToggle(id) {
+  document.querySelectorAll('#llmToggles [data-llm]').forEach(btn => {
+    const pid = btn.getAttribute('data-llm');
+    btn.classList.toggle('on', pid === id);
+    btn.classList.toggle('in-use', llmInUse(pid));
+  });
+}
+function syncLlmButton() {
+  const btn = document.getElementById('saveLlm');
+  const inUse = llmInUse(llmSelected);
+  const newKey = !!document.getElementById('llmKey').value;
+  btn.textContent = (inUse && !newKey) ? 'Stop using' : 'Save and use';
+}
+function showLlm(d) {
+  llmState = d;
+  if (!llmSelected) llmSelected = (llmActiveIds()[0] || 'lmstudio');
+  markLlmToggle(llmSelected);
+  fillLlmFields(llmSelected);
+  const ids = llmActiveIds();
+  if (ids.length) {
+    const bits = ['Using: ' + (d.name || ids.join(', '))];
+    if (d.model) bits.push(d.model);
+    if (d.available != null) bits.push(d.available ? 'up' : 'down');
+    document.getElementById('llmNow').textContent = bits.join(' · ');
+  } else {
+    document.getElementById('llmNow').textContent = 'Not using a classifier';
+  }
+  syncLlmButton();
+}
+function renderProposals(rows) {
+  const el = document.getElementById('proposalList');
+  if (!rows.length) { el.innerHTML = '<div class="empty">none</div>'; return; }
+  el.innerHTML = rows.map(r => `
+    <div class="result-item abusive-item" data-cid="${esc(r.cid)}" data-reason="${esc(r.reason)}">
+      <div class="abusive-top">
+        <div class="result-main">
+          <a class="result-cid" href="https://dweb.link/ipfs/${esc(r.cid)}" target="_blank" rel="noopener">${esc(r.cid)}</a>
+          <div class="meta">
+            <b>${esc(r.reason === 'wrong' ? 'wrong classification' : 'abusive')}</b>
+            ${r.mime_type ? ' · ' + esc(r.mime_type) : ''}
+            ${r.field ? ' · ' + esc(r.field) : ''}
+            ${r.count > 1 ? ' · ' + esc(r.count) + ' reports' : ''}
+          </div>
+          ${r.topic ? `<div class="result-title">${esc(r.topic)}</div>` : ''}
+        </div>
+        <div class="result-actions">
+          <button type="button" class="btn" data-decide="accept">Accept</button>
+          <button type="button" class="btn" data-decide="reject">Reject</button>
+          <div class="report-status"></div>
+        </div>
+      </div>
+    </div>`).join('');
+}
+function renderAbusive(results) {
+  const el = document.getElementById('abusiveList');
+  if (!results.length) { el.innerHTML = '<div class="empty">none</div>'; return; }
+  el.innerHTML = results.map(r => {
+    const actions = r.mine
+      ? `<button type="button" class="btn" data-reason="clear">Restore</button>
+         <button type="button" class="btn" data-reason="wrong">Wrong classification</button>`
+      : '';
+    const reporters = (r.reporters || []).map(p => {
+      const name = p.alias ? esc(p.alias) + ' · ' : '';
+      const block = p.blacklisted
+        ? '<span class="report-status">blacklisted</span>'
+        : '<button type="button" class="btn" data-blacklist>Blacklist</button>';
+      return `<div class="reporter-row" data-publisher="${esc(p.publisher)}">
+        <div class="result-cid">Reported by ${name}${esc(p.publisher)}</div>
+        ${block}
+      </div>`;
+    }).join('');
+    return `
+    <div class="result-item abusive-item" data-cid="${esc(r.cid)}">
+      <div class="abusive-top">
+        <div class="result-main">
+          <a class="result-cid" href="https://dweb.link/ipfs/${esc(r.cid)}" target="_blank" rel="noopener">${esc(r.cid)}</a>
+          <div class="meta">
+            <b>${esc(r.mime_type || 'unknown')}</b>
+            ${r.field ? ' · ' + esc(r.field) : ''}
+          </div>
+          ${r.topic ? `<div class="result-title">${esc(r.topic)}</div>` : ''}
+        </div>
+        <div class="result-actions">${actions}<div class="report-status"></div></div>
+      </div>
+      ${reporters}
+    </div>`;
+  }).join('');
+}
+function renderBlacklist(rows) {
+  const el = document.getElementById('blacklistList');
+  if (!rows.length) { el.innerHTML = '<div class="empty">none</div>'; return; }
+  el.innerHTML = rows.map(p => `
+    <div class="result-item" data-publisher="${esc(p.publisher)}">
+      <div class="result-main">
+        <div class="result-cid">${p.alias ? esc(p.alias) + ' · ' : ''}${esc(p.publisher)}</div>
+      </div>
+      <div class="result-actions">
+        <button type="button" class="btn" data-unblacklist>Unblock</button>
+      </div>
+    </div>`).join('');
+}
+async function loadAbusive() {
+  try {
+    const {res, d} = await api('/api/reports');
+    if (res.ok) {
+      renderProposals(d.proposals || []);
+      renderAbusive(d.results || []);
+    }
+  } catch (e) {}
+  try {
+    const {res, d} = await api('/api/blacklist');
+    if (res.ok) renderBlacklist(d.publishers || []);
+  } catch (e) {}
+}
+async function changeReport(item, cid, reason) {
+  const status = item.querySelector('.report-status') || document.getElementById('abusiveStatus');
+  const buttons = item.querySelectorAll('button');
+  buttons.forEach(b => { b.disabled = true; });
+  try {
+    const {res, d} = await api('/api/report', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cid, reason}),
+    });
+    if (!res.ok) {
+      status.textContent = d.detail || 'update failed';
+      buttons.forEach(b => { b.disabled = false; });
+      return;
+    }
+    loadAbusive();
+  } catch (e) {
+    status.textContent = 'update failed';
+    buttons.forEach(b => { b.disabled = false; });
+  }
+}
+document.getElementById('proposalList').addEventListener('click', ev => {
+  const item = ev.target.closest('.result-item');
+  const btn = ev.target.closest('[data-decide]');
+  if (!item || !btn) return;
+  ev.preventDefault();
+  decideProposal(
+    item,
+    item.getAttribute('data-cid'),
+    item.getAttribute('data-reason'),
+    btn.getAttribute('data-decide'),
+  );
+});
+async function decideProposal(item, cid, reason, action) {
+  const status = item.querySelector('.report-status') || document.getElementById('proposalStatus');
+  const buttons = item.querySelectorAll('button');
+  buttons.forEach(b => { b.disabled = true; });
+  try {
+    const {res, d} = await api('/api/reports/decide', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cid, reason, action}),
+    });
+    if (!res.ok) {
+      status.textContent = d.detail || 'update failed';
+      buttons.forEach(b => { b.disabled = false; });
+      return;
+    }
+    loadAbusive();
+  } catch (e) {
+    status.textContent = 'update failed';
+    buttons.forEach(b => { b.disabled = false; });
+  }
+}
+document.getElementById('abusiveList').addEventListener('click', ev => {
+  const item = ev.target.closest('.result-item');
+  if (!item) return;
+  const block = ev.target.closest('[data-blacklist]');
+  if (block) {
+    ev.preventDefault();
+    const row = block.closest('[data-publisher]');
+    blacklistPublisher(row && row.getAttribute('data-publisher'));
+    return;
+  }
+  const btn = ev.target.closest('[data-reason]');
+  if (!btn) return;
+  ev.preventDefault();
+  changeReport(item, item.getAttribute('data-cid'), btn.getAttribute('data-reason'));
+});
+document.getElementById('blacklistList').addEventListener('click', ev => {
+  const btn = ev.target.closest('[data-unblacklist]');
+  const item = ev.target.closest('[data-publisher]');
+  if (!btn || !item) return;
+  ev.preventDefault();
+  unblacklistPublisher(item.getAttribute('data-publisher'));
+});
+async function blacklistPublisher(publisher) {
+  const status = document.getElementById('abusiveStatus');
+  if (!publisher) return;
+  try {
+    const {res, d} = await api('/api/blacklist', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({publisher}),
+    });
+    if (!res.ok) {
+      status.textContent = d.detail || 'blacklist failed';
+      return;
+    }
+    status.textContent = '';
+    loadAbusive();
+  } catch (e) {
+    status.textContent = 'blacklist failed';
+  }
+}
+async function unblacklistPublisher(publisher) {
+  const status = document.getElementById('blacklistStatus');
+  if (!publisher) return;
+  try {
+    const {res, d} = await api('/api/blacklist/clear', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({publisher}),
+    });
+    if (!res.ok) {
+      status.textContent = d.detail || 'unblock failed';
+      return;
+    }
+    status.textContent = '';
+    loadAbusive();
+  } catch (e) {
+    status.textContent = 'unblock failed';
+  }
+}
+async function loadLlm() {
+  try {
+    const {res, d} = await api('/api/llm');
+    if (res.ok) showLlm(d);
+  } catch (e) {}
+}
+function pickLlm(id) {
+  llmSelected = id;
+  fillLlmFields(id);
+  markLlmToggle(id);
+  document.getElementById('llmStatus').className = 'status';
+  document.getElementById('llmStatus').textContent = '';
+  syncLlmButton();
+}
+function llmAction() {
+  const inUse = llmInUse(llmSelected);
+  const newKey = !!document.getElementById('llmKey').value;
+  if (inUse && !newKey) {
+    stopLlm();
+  } else {
+    saveLlm();
+  }
+}
+async function stopLlm() {
+  const status = document.getElementById('llmStatus');
+  const btn = document.getElementById('saveLlm');
+  const keep = llmSelected;
+  status.className = 'status';
+  status.textContent = 'Stopping…';
+  btn.disabled = true;
+  try {
+    const {res, d} = await api('/api/llm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id: keep, enabled: false}),
+    });
+    if (!res.ok) {
+      status.className = 'status err';
+      status.textContent = d.detail || 'stop failed';
+      return;
+    }
+    llmSelected = keep;
+    showLlm(d);
+    pickLlm(keep);
+    status.className = 'status ok';
+    status.textContent = 'stopped';
+    loadStats();
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'stop failed';
+  } finally {
+    btn.disabled = false;
+    syncLlmButton();
+  }
+}
+async function saveLlm() {
+  const status = document.getElementById('llmStatus');
+  const btn = document.getElementById('saveLlm');
+  status.className = 'status';
+  status.textContent = 'Saving…';
+  btn.disabled = true;
+  try {
+    const {res, d} = await api('/api/llm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        id: llmSelected || 'lmstudio',
+        base_url: document.getElementById('llmUrl').value,
+        model: document.getElementById('llmModel').value,
+        api_key: document.getElementById('llmKey').value,
+      }),
+    });
+    if (!res.ok) {
+      status.className = 'status err';
+      status.textContent = d.detail || 'save failed';
+      return;
+    }
+    document.getElementById('llmKey').value = '';
+    showLlm(d);
+    status.className = 'status ok';
+    status.textContent = 'saved · ' + (d.available ? 'up' : 'down');
+    loadStats();
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'save failed';
+  } finally {
+    btn.disabled = false;
+    syncLlmButton();
+  }
+}
+(async () => {
+  await loadAuth();
+  loadStats();
+  if (canAdmin()) {
+    loadClub();
+    loadAlias();
+    loadLlm();
+    loadAbusive();
+  }
+  setInterval(loadStats, 5000);
+  setInterval(() => { if (canAdmin()) loadAbusive(); }, 15000);
+})();
+</script>
+</body>
+</html>

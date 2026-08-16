@@ -1,0 +1,12 @@
+computer-science
+biology
+physics
+medicine
+chemistry
+mathematics
+engineering
+earth-science
+economics
+social-science
+humanities
+other

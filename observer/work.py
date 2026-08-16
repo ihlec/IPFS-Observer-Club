@@ -1,0 +1,425 @@
+"""Local discovery work queue. Club.sqlite is the shared catalog; this file
+only tracks sniffed CIDs that this node has not yet processed.
+
+One connection per thread, autocommit, and a short busy wait. A single
+shared handle used from 16 workers still raised SQLITE_BUSY.
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+import threading
+import time
+from contextlib import contextmanager
+
+from . import cidutil, config
+
+_db_lock = threading.RLock()
+_tls = threading.local()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS cids (
+    cid         TEXT PRIMARY KEY,
+    codec       TEXT,
+    first_seen  REAL,
+    last_seen   REAL,
+    peer_count  INTEGER DEFAULT 0,
+    want_count  INTEGER DEFAULT 0,
+    status      TEXT DEFAULT 'discovered',
+    attempts    INTEGER DEFAULT 0,
+    mime_type   TEXT,
+    size        INTEGER,
+    filename    TEXT,
+    last_retrieved REAL,
+    last_checked   REAL,
+    error       TEXT,
+    source      TEXT DEFAULT 'sniff'
+);
+CREATE INDEX IF NOT EXISTS idx_cids_status ON cids(status, peer_count DESC);
+CREATE INDEX IF NOT EXISTS idx_cids_last_seen ON cids(last_seen);
+
+CREATE TABLE IF NOT EXISTS cid_peers (
+    cid  TEXT,
+    peer TEXT,
+    PRIMARY KEY (cid, peer)
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS evicted (
+    cid        TEXT PRIMARY KEY,
+    peer_count INTEGER,
+    evicted_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS seen_cids (
+    cid        TEXT PRIMARY KEY,
+    first_seen REAL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS spool_offsets (
+    path   TEXT PRIMARY KEY,
+    offset INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS unprocessable (
+    cid       TEXT PRIMARY KEY,
+    mime_type TEXT,
+    seen_at   REAL
+);
+"""
+
+
+def reset():
+    """Close this thread's connection. Tests call this after changing WORK_DB."""
+    conn = getattr(_tls, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+        _tls.conn = None
+
+
+class _Local:
+    """Test shim: ``work._local.conn = None`` still resets the handle."""
+
+    @property
+    def conn(self):
+        return getattr(_tls, "conn", None)
+
+    @conn.setter
+    def conn(self, value):
+        if value is None:
+            reset()
+        else:
+            _tls.conn = value
+
+
+_local = _Local()
+
+
+def connect():
+    conn = getattr(_tls, "conn", None)
+    if conn is None:
+        os.makedirs(os.path.dirname(config.WORK_DB) or ".", exist_ok=True)
+        first = not os.path.exists(config.WORK_DB)
+        conn = sqlite3.connect(
+            config.WORK_DB,
+            timeout=30,
+            isolation_level=None,
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        if first:
+            conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        _tls.conn = conn
+    return conn
+
+
+def _migrate(conn):
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(cids)")]
+    if "source" not in cols:
+        conn.execute("ALTER TABLE cids ADD COLUMN source TEXT DEFAULT 'sniff'")
+
+
+def _locked_write(fn):
+    """Run a work-db write. Wait out SQLITE_BUSY from spool/janitor/WAL."""
+    last = None
+    for attempt in range(6):
+        try:
+            with _db_lock:
+                return fn(connect())
+        except sqlite3.OperationalError as e:
+            msg = str(e).lower()
+            if "locked" not in msg and "busy" not in msg:
+                raise
+            last = e
+            time.sleep(0.05 * (2 ** min(attempt, 4)))
+    raise last
+
+
+@contextmanager
+def locked():
+    """Hold the process lock. Do not block on network inside this."""
+    with _db_lock:
+        yield connect()
+
+
+def enqueue_review(cid):
+    """Queue a CID for a second classify. Kept like a live WANT that must not age out."""
+    from . import store
+    if not cidutil.valid(cid) or store.local_classified(cid):
+        return False
+    now = time.time()
+    min_age = int(config.FETCH.get("min_age_seconds", 10))
+    first = now - min_age - 1
+    codec = cidutil.codec_of(cid)
+    with locked() as conn:
+        conn.execute(
+            "INSERT INTO cids (cid, codec, first_seen, last_seen, "
+            "peer_count, want_count, status, attempts, source) "
+            "VALUES (?, ?, ?, ?, 1, 1, 'discovered', 0, 'report') "
+            "ON CONFLICT(cid) DO UPDATE SET "
+            "  last_seen = excluded.last_seen, "
+            "  first_seen = MIN(first_seen, excluded.first_seen), "
+            "  source = 'report', "
+            "  peer_count = MAX(peer_count, 1), "
+            "  status = 'discovered', "
+            "  attempts = 0, "
+            "  error = NULL",
+            (cid, codec, first, now),
+        )
+    return True
+
+
+def remember_binary(cid, mime_type=None):
+    """Drop a binary CID from the live queue and do not ingest it again."""
+    now = time.time()
+    with locked() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO unprocessable(cid, mime_type, seen_at) "
+            "VALUES (?, ?, ?)",
+            (cid, mime_type, now),
+        )
+        forget_cid(conn, cid)
+    return True
+
+
+def is_unprocessable(cid):
+    with _db_lock:
+        row = connect().execute(
+            "SELECT 1 FROM unprocessable WHERE cid = ?", (cid,),
+        ).fetchone()
+    return row is not None
+
+
+def forget_cid(conn, cid):
+    """Drop a CID so a later sighting can retry. Skips stay recorded."""
+    with _db_lock:
+        conn.execute("DELETE FROM cid_peers WHERE cid = ?", (cid,))
+        conn.execute("DELETE FROM cids WHERE cid = ?", (cid,))
+
+
+def drop_directory(conn, cid):
+    """Forget a UnixFS folder and ignore later Bitswap WANTs unless peers grow."""
+    with _db_lock:
+        row = conn.execute(
+            "SELECT peer_count FROM cids WHERE cid = ?", (cid,)
+        ).fetchone()
+        peers = int((row["peer_count"] if row else 1) or 1)
+        conn.execute(
+            "INSERT OR REPLACE INTO evicted(cid, peer_count, evicted_at) "
+            "VALUES (?, ?, ?)",
+            (cid, peers, time.time()),
+        )
+        conn.execute("DELETE FROM cid_peers WHERE cid = ?", (cid,))
+        conn.execute("DELETE FROM cids WHERE cid = ?", (cid,))
+
+
+def max_age_seconds():
+    return int(config.FETCH.get("max_age_seconds", 900))
+
+
+def max_queue():
+    return int(config.FETCH.get("max_queue", 400))
+
+
+def skip_ttl_seconds():
+    return int(config.FETCH.get("skip_ttl_seconds", 21600))
+
+
+def prefer_min_peer_count():
+    return int(config.FETCH.get("prefer_min_peer_count", 2))
+
+
+def prune(conn=None):
+    """Keep only recent WANTs. Stale IPFS CIDs are usually gone."""
+    conn = conn or connect()
+    now = time.time()
+    cutoff = now - max_age_seconds()
+    cap = max_queue()
+    dropped = 0
+    with _db_lock:
+        stale = conn.execute(
+            "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND IFNULL(source, 'sniff') != 'report' "
+            "AND last_seen < ?",
+            (cutoff,),
+        ).fetchall()
+        for row in stale:
+            forget_cid(conn, row[0])
+            dropped += 1
+        folders = conn.execute(
+            "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND IFNULL(source, 'sniff') != 'report' "
+            "AND codec = 'dag-pb' "
+            "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf'"
+        ).fetchall()
+        for row in folders:
+            forget_cid(conn, row[0])
+            dropped += 1
+        extra = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing')"
+        ).fetchone()[0] - cap
+        if extra > 0:
+            old = conn.execute(
+                "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
+                "AND IFNULL(source, 'sniff') != 'report' "
+                "ORDER BY "
+                "  CASE WHEN codec = 'raw' "
+                "         OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
+                "       THEN 1 ELSE 0 END ASC, "
+                "  last_seen ASC LIMIT ?",
+                (extra,),
+            ).fetchall()
+            for row in old:
+                forget_cid(conn, row[0])
+                dropped += 1
+        n = expire_local_skips(conn)
+    return dropped + n
+
+
+def expire_local_skips(conn=None):
+    """Requeue local unprocessable skips after TTL. Content may appear later."""
+    conn = conn or connect()
+    ttl = skip_ttl_seconds()
+    if ttl <= 0:
+        return 0
+    cutoff = time.time() - ttl
+    with _db_lock:
+        return conn.execute(
+            "UPDATE cids SET status = 'discovered', attempts = 0, error = 'skip_expired' "
+            "WHERE status = 'skipped' "
+            "AND IFNULL(error, '') IN ('unprocessable', 'llm_disagreed') "
+            "AND IFNULL(mime_type, '') NOT LIKE 'image/%' "
+            "AND IFNULL(mime_type, '') NOT LIKE 'video/%' "
+            "AND IFNULL(mime_type, '') NOT LIKE 'audio/%' "
+            "AND IFNULL(last_checked, last_seen) < ?",
+            (cutoff,),
+        ).rowcount
+
+
+def mark(conn, cid, status, **fields):
+    cols = ["status = ?"]
+    vals = [status]
+    for key, value in fields.items():
+        cols.append("%s = ?" % key)
+        vals.append(value)
+    vals.append(cid)
+    _locked_write(lambda c: c.execute(
+        "UPDATE cids SET " + ", ".join(cols) + " WHERE cid = ?", vals,
+    ))
+
+
+def bump_attempts(conn, cid, attempts):
+    _locked_write(lambda c: c.execute(
+        "UPDATE cids SET attempts = ? WHERE cid = ?", (attempts, cid),
+    ))
+
+
+def note_fetch(conn, cid, retrieved=None):
+    now = time.time()
+    _locked_write(lambda c: c.execute(
+        "UPDATE cids SET last_checked = ?, last_retrieved = COALESCE(?, last_retrieved) "
+        "WHERE cid = ?",
+        (now, retrieved, cid),
+    ))
+
+
+_DOC_SQL = (
+    "(codec = 'raw' OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
+    "OR IFNULL(source, 'sniff') = 'report')"
+)
+
+
+def _select_discovered(conn, extra_where, min_peers, max_first_seen,
+                       min_last_seen, attempt_cap, limit):
+    return conn.execute(
+        "SELECT cid, codec, peer_count, attempts FROM cids "
+        "WHERE status = 'discovered' "
+        "  AND peer_count >= ? "
+        "  AND first_seen <= ? "
+        "  AND (last_seen >= ? OR IFNULL(source, 'sniff') = 'report') "
+        "  AND attempts < ? "
+        "  AND IFNULL(codec, '') NOT IN ('libp2p-key', 'json', 'dag-json') "
+        "  AND " + extra_where + " "
+        "ORDER BY peer_count DESC, last_seen DESC LIMIT ?",
+        (min_peers, max_first_seen, min_last_seen, attempt_cap, limit),
+    ).fetchall()
+
+
+def take_batch(conn, limit=5):
+    """Claim work. Sniffed folders stay out; review rows still run."""
+    now = time.time()
+    max_first_seen = now - int(config.FETCH.get("min_age_seconds", 10))
+    min_last_seen = now - max_age_seconds()
+    attempt_cap = max(
+        int(config.FETCH.get("max_retries", 1)),
+        int(config.FETCH.get("max_timeout_retries", 3)),
+    ) + 1
+    min_peers = int(config.FETCH.get("min_peer_count", 1))
+    prefer = max(min_peers, prefer_min_peer_count())
+    args = (max_first_seen, min_last_seen, attempt_cap)
+    with _db_lock:
+        rows = _select_discovered(
+            conn, _DOC_SQL, prefer, *args, limit,
+        )
+        if not rows:
+            rows = _select_discovered(
+                conn, _DOC_SQL, min_peers, *args, limit,
+            )
+        if rows:
+            conn.executemany(
+                "UPDATE cids SET status = 'processing' WHERE cid = ?",
+                [(r["cid"],) for r in rows],
+            )
+        return rows
+
+
+def live_count(conn=None):
+    """CIDs that occupy the fetch cap (discovered + processing)."""
+    conn = conn or connect()
+    with _db_lock:
+        return conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing')"
+        ).fetchone()[0]
+
+
+def at_cap(conn=None):
+    return live_count(conn) >= max_queue()
+
+
+def stats():
+    with _db_lock:
+        conn = connect()
+        out = {}
+        for status in ("discovered", "processing", "indexed", "skipped"):
+            out[status] = conn.execute(
+                "SELECT COUNT(*) FROM cids WHERE status = ?", (status,)
+            ).fetchone()[0]
+        out["seen"] = conn.execute("SELECT COUNT(*) FROM seen_cids").fetchone()[0]
+        out["backlog"] = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status = 'discovered' AND peer_count >= ?",
+            (int(config.FETCH.get("min_peer_count", 1)),),
+        ).fetchone()[0]
+        oldest = conn.execute(
+            "SELECT MIN(last_seen) FROM cids WHERE status IN ('discovered', 'processing')"
+        ).fetchone()[0]
+        newest = conn.execute(
+            "SELECT MAX(last_seen) FROM cids WHERE status IN ('discovered', 'processing')"
+        ).fetchone()[0]
+        now = time.time()
+        out["oldest_age_seconds"] = int(now - oldest) if oldest else 0
+        out["newest_age_seconds"] = int(now - newest) if newest else 0
+        return out
+
+
+def db_file_size():
+    with _db_lock:
+        conn = connect()
+        page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        return page_count * page_size

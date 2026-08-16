@@ -1,0 +1,12 @@
+data/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+.DS_Store
+config.toml
+identity.key
+.secret
+.env

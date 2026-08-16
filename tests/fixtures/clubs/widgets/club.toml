@@ -1,0 +1,7 @@
+id = "widgets"
+name = "Widget manuals"
+prompt_ver = "1"
+in_scope_description = "True only when this is a product manual or datasheet for a widget."
+
+[aliases]
+gadget = "widget"

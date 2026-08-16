@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPFS Observer Club</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+  <h1 id="pageTitle">IPFS Observer Club</h1>
+  <div class="meta-line">
+    <button type="button" class="disclosure" id="statsToggle" onclick="toggleStats()">[ Stats ]</button>
+    <span id="metaBits">Model: —</span>
+    <a href="/admin">[ Admin ]</a>
+  </div>
+  <div class="stats-row" id="statCards"></div>
+
+  <div class="section">
+    <h3>Keyword Search</h3>
+    <form class="search-row" onsubmit="doSearch(); return false;">
+      <div class="input-wrap">
+        <input type="text" id="q" placeholder="Search documents by keyword..." autofocus>
+      </div>
+      <button type="submit" class="btn btn-search">Search</button>
+    </form>
+    <div class="filters">
+      <select id="mime" onchange="onFilterChange()">
+        <option value="">any datatype</option>
+        <option value="text/html">text/html</option>
+        <option value="application/pdf">application/pdf</option>
+        <option value="text/plain">text/plain</option>
+        <option value="text/markdown">text/markdown</option>
+        <option value="application/xhtml+xml">application/xhtml+xml</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="results-hdr">
+      <div class="listing" id="listing"></div>
+      <div class="row">
+        <button type="button" class="btn" onclick="exportCids()">Export CIDs</button>
+        <div class="page-info" id="pageInfo"></div>
+      </div>
+    </div>
+    <div id="results"><div class="empty">loading…</div></div>
+    <div class="pagination" id="pager" style="display:none">
+      <button class="page-btn" onclick="page(-1)">‹ prev</button>
+      <button class="page-btn" onclick="page(1)">next ›</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h3>Observer Ranking</h3>
+    <table>
+      <thead><tr><th class="rank">#</th><th>alias</th><th>node</th><th class="num">classified</th></tr></thead>
+      <tbody id="rank"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+const PAGE = 20;
+let offset = 0, total = 0;
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function statCard(value, label) {
+  return `<div class="stat-card"><div class="stat-value">${esc(value)}</div><div class="stat-label">${esc(label)}</div></div>`;
+}
+function toggleStats() {
+  const row = document.getElementById('statCards');
+  const btn = document.getElementById('statsToggle');
+  row.classList.toggle('open');
+  btn.classList.toggle('open');
+}
+let clubName = '—';
+let modelName = '—';
+let isAdmin = false;
+function setMeta() {
+  const title = clubName && clubName !== '—'
+    ? 'IPFS Observer Club — ' + clubName
+    : 'IPFS Observer Club';
+  document.getElementById('pageTitle').textContent = title;
+  document.title = title;
+  document.getElementById('metaBits').textContent = 'Model: ' + modelName;
+}
+async function loadStats() {
+  try {
+    const s = await fetch('/api/stats').then(r => r.json());
+    const w = s.work || {};
+    if (s.club && (s.club.name || s.club.id)) clubName = s.club.name || s.club.id;
+    if (s.llm_name || s.model) {
+      modelName = [s.llm_name, s.model].filter(Boolean).join(' · ') || '—';
+    }
+    setMeta();
+    document.getElementById('statCards').innerHTML =
+      statCard((s.classifies||0).toLocaleString(), 'classified') +
+      statCard((w.backlog||0).toLocaleString(), 'queue') +
+      statCard((s.publishers||0).toLocaleString(), 'publishers') +
+      statCard(s.llm ? 'up' : 'down', 'llm') +
+      statCard(s.clubd ? 'up' : 'down', 'clubd');
+  } catch (e) {}
+}
+async function loadRanking() {
+  try {
+    const d = await fetch('/api/publishers').then(r => r.json());
+    const rows = d.publishers || [];
+    document.getElementById('rank').innerHTML = rows.length
+      ? rows.map((p, i) => `
+      <tr>
+        <td class="rank">${i + 1}</td>
+        <td>${esc(p.alias || '—')}</td>
+        <td class="node-id">${esc(p.publisher || '')}</td>
+        <td class="num">${(p.n_classify || 0).toLocaleString()}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" class="empty">no classifies yet</td></tr>';
+  } catch (e) {}
+}
+function filters() {
+  return { mime: document.getElementById('mime').value };
+}
+async function doSearch() {
+  const q = document.getElementById('q').value.trim();
+  if (!q) { offset = 0; return doBrowse(); }
+  const params = new URLSearchParams({ q, ...filters() });
+  const res = await fetch('/api/search?' + params).then(r => r.json());
+  document.getElementById('listing').textContent = '';
+  document.getElementById('pager').style.display = 'none';
+  document.getElementById('pageInfo').textContent = '';
+  render(res.results || []);
+}
+async function doBrowse() {
+  const params = new URLSearchParams({ ...filters(), limit: PAGE, offset });
+  const res = await fetch('/api/browse?' + params).then(r => r.json());
+  total = res.total || 0;
+  document.getElementById('listing').textContent = total
+    ? `browsing ${total.toLocaleString()} classifies — latest first` : '';
+  render(res.results || []);
+  const pager = document.getElementById('pager');
+  if (total > PAGE) {
+    pager.style.display = 'flex';
+    document.getElementById('pageInfo').textContent =
+      `page ${Math.floor(offset/PAGE)+1} / ${Math.ceil(total/PAGE)}`;
+  } else {
+    pager.style.display = 'none';
+    document.getElementById('pageInfo').textContent = '';
+  }
+}
+function page(d) { offset = Math.max(0, offset + d*PAGE); doBrowse(); window.scrollTo({top:0,behavior:'smooth'}); }
+function onFilterChange() { offset = 0; doSearch(); }
+function searchFor(t) { document.getElementById('q').value = t; doSearch(); }
+function exportCids() {
+  const q = document.getElementById('q').value.trim();
+  const params = new URLSearchParams(filters());
+  if (q) params.set('q', q);
+  window.location.href = '/api/export?' + params;
+}
+function fieldShare(r) {
+  const n = r.label_voters || 0;
+  if (n < 2 || !r.field) return '';
+  const votes = (r.field_votes || {})[r.field] || 0;
+  return ` ${votes}/${n}`;
+}
+function topicShare(r) {
+  const n = r.label_voters || 0;
+  if (n < 2 || !r.topic) return '';
+  const key = String(r.topic).trim().toLowerCase();
+  const votes = (r.topic_votes || {})[key];
+  if (!votes) return '';
+  return ` ${votes}/${n}`;
+}
+function kwShare(r, keyword) {
+  const n = r.label_voters || 0;
+  if (n < 2) return '';
+  const votes = (r.keyword_votes || {})[String(keyword).trim().toLowerCase()];
+  if (!votes) return '';
+  return ` ${votes}/${n}`;
+}
+function render(results) {
+  const el = document.getElementById('results');
+  if (!results.length) { el.innerHTML = '<div class="empty">no results</div>'; return; }
+  el.innerHTML = results.map(r => `
+    <div class="result-item" data-cid="${esc(r.cid)}">
+      <div class="result-main">
+        <a class="result-cid" href="https://dweb.link/ipfs/${esc(r.cid)}" target="_blank" rel="noopener">${esc(r.cid)}</a>
+        <div class="meta">
+          <b>${esc(r.mime_type || 'unknown')}</b>
+          ${r.field ? ' · <span class="field-link" onclick="searchFor(\'' + esc(r.field) + '\')">' + esc(r.field) + fieldShare(r) + '</span>' : ''}
+        </div>
+        ${r.topic ? `<div class="result-title" onclick="searchFor('${esc(r.topic)}')">${esc(r.topic)}${topicShare(r)}</div>` : ''}
+        <div class="class-tags">
+          ${(r.keywords||'').split(',').filter(k=>k.trim()).map(k =>
+            `<span class="kw-tag" onclick="searchFor('${esc(k.trim())}')">${esc(k.trim())}${kwShare(r, k.trim())}</span>`).join('')}
+        </div>
+      </div>
+      <div class="result-actions">
+        <button type="button" class="btn report-btn">Report</button>
+        <div class="report-menu" hidden>
+          <button type="button" class="btn" data-reason="abusive">Abusive</button>
+          <button type="button" class="btn" data-reason="wrong">Wrong classification</button>
+        </div>
+        <div class="report-status"></div>
+      </div>
+    </div>`).join('');
+}
+function closeReportMenus(except) {
+  document.querySelectorAll('.result-item').forEach(item => {
+    if (item === except) return;
+    const menu = item.querySelector('.report-menu');
+    if (menu) menu.hidden = true;
+  });
+}
+function onResultsClick(ev) {
+  const item = ev.target.closest('.result-item');
+  if (!item) return;
+  if (ev.target.closest('.report-btn')) {
+    ev.preventDefault();
+    const menu = item.querySelector('.report-menu');
+    const open = menu.hidden;
+    closeReportMenus();
+    menu.hidden = !open;
+    return;
+  }
+  const reasonBtn = ev.target.closest('[data-reason]');
+  if (!reasonBtn) return;
+  ev.preventDefault();
+  sendReport(item, item.getAttribute('data-cid'), reasonBtn.getAttribute('data-reason'));
+}
+async function sendReport(item, cid, reason) {
+  const status = item.querySelector('.report-status');
+  const buttons = item.querySelectorAll('button');
+  buttons.forEach(b => { b.disabled = true; });
+  status.textContent = '';
+  try {
+    const res = await fetch('/api/report', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cid, reason}),
+    });
+    if (res.status === 401) {
+      status.innerHTML = '<a href="/admin">admin login</a>';
+      buttons.forEach(b => { b.disabled = false; });
+      return;
+    }
+    if (!res.ok) {
+      status.textContent = res.status === 429 ? 'try again later' :
+        (res.status === 404 ? 'restart observer' : 'report failed');
+      buttons.forEach(b => { b.disabled = false; });
+      return;
+    }
+    const d = await res.json().catch(() => ({}));
+    if (d.pending) {
+      item.querySelector('.result-actions').innerHTML =
+        '<span class="report-status">reported</span>';
+      return;
+    }
+    if (reason === 'abusive') {
+      item.remove();
+      return;
+    }
+    item.querySelector('.result-actions').innerHTML =
+      '<span class="report-status">review asked</span>';
+  } catch (e) {
+    status.textContent = 'report failed';
+    buttons.forEach(b => { b.disabled = false; });
+  }
+}
+document.getElementById('results').addEventListener('click', onResultsClick);
+document.addEventListener('click', ev => {
+  if (!ev.target.closest('.result-item')) closeReportMenus();
+});
+async function loadClub() {
+  try {
+    const c = await fetch('/api/club').then(r => r.json());
+    clubName = c.name || c.id || 'Academic';
+    setMeta();
+    const mimeSel = document.getElementById('mime');
+    const mimeCur = mimeSel.value;
+    const known = new Set([
+      'text/html', 'application/pdf', 'text/plain',
+      'text/markdown', 'application/xhtml+xml',
+    ]);
+    (c.mimes || []).forEach(m => { if (m) known.add(m); });
+    mimeSel.innerHTML = '<option value="">any datatype</option>' +
+      [...known].sort().map(m => `<option>${esc(m)}</option>`).join('');
+    if (mimeCur) mimeSel.value = mimeCur;
+  } catch (e) {}
+}
+async function loadAuth() {
+  try {
+    const s = await fetch('/api/admin/status').then(r => r.json());
+    isAdmin = !!s.authenticated;
+  } catch (e) {
+    isAdmin = false;
+  }
+}
+loadAuth().then(() => {
+  loadClub(); loadStats(); loadRanking();
+  doBrowse();
+});
+setInterval(loadStats, 5000);
+setInterval(loadRanking, 15000);
+</script>
+</body>
+</html>
