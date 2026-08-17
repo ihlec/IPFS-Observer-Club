@@ -173,7 +173,7 @@ def process_one(conn, row):
     if result.ok and (
         result.is_directory or result.mime_type == "inode/directory"
     ):
-        clubd_client.publish_skip(cid, "inode/directory", club.DIRECTORY_SKIP_REASON)
+        # Folders stay local. Gossiping them crowds out classifies.
         work.drop_directory(conn, cid)
         _bump("dir_drops")
         return True

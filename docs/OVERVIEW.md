@@ -96,7 +96,8 @@ Restart after a club change.
 | state | where | gossiped? |
 | --- | --- | --- |
 | classify (`llm` or `reuse`) | `classifies` + first-seen `docs` | yes |
-| skip `out_of_scope` / `directory` (legacy `not_academic`) | `skips` | yes |
+| skip `out_of_scope` (legacy `not_academic`) | `skips` | yes |
+| skip `directory` | work queue only (`drop_directory`) | no |
 | skip `unprocessable` | work queue only | no |
 | `llm_disagreed` | work queue, expires like unprocessable | no |
 | claim | `claims` keyed by **publisher** | yes, short lease |
@@ -135,7 +136,7 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
 - drops invalid CIDs and codecs `libp2p-key`, `json`, `dag-json`,
   `dag-cbor` (not documents)
 - UnixFS `dag-pb` **is** queued: that is how IPFS stores PDFs. A
-  directory is dropped after the first block (`inode/directory` skip)
+  directory is dropped after the first block and is **not** gossiped
 - drops CIDs this node already marked locally unprocessable
 - at cap, **skips new raw** WANTs and **evicts raw** to admit `dag-pb`
   (Bitswap is mostly raw leaves; FIFO would starve PDF roots). New
@@ -169,8 +170,9 @@ flowchart TD
 - **Classify** — do not fetch, unless `must_classify` (below).
 - **Foreign claim** — park until `until` or a classify/skip lands. This
   node’s **own** lease is ignored so a claim cannot stall the claimer.
-- **Skip** — do not fetch if the skip is live. `out_of_scope` /
-  `directory` persist. Other skip reasons expire after
+- **Skip** — do not fetch if the skip is live. `out_of_scope` persists.
+  `directory` skips that still arrive from older nodes also persist, but
+  this node does not publish them. Other skip reasons expire after
   `skip_ttl_seconds` (6h). A skip never hides a live classify.
 
 `must_classify` turns the hook **off** (and turns fingerprint reuse
@@ -202,7 +204,7 @@ flowchart TD
   hook -->|foreign claim| wait[return to discovered]
   hook -->|must_classify or empty| fetch[CID-verified sample]
   fetch --> dir{UnixFS directory?}
-  dir -->|yes| gdir["gossip skip directory"]
+  dir -->|yes| gdir["local drop_directory"]
   dir -->|no| mime{PDF / HTML / plain with usable text?}
   mime -->|no| loc["local unprocessable / remember binary"]
   mime -->|yes| fp{same text_sha256 and hook allows reuse?}
@@ -304,7 +306,9 @@ publisher. Blacklist drops that node’s events on this machine only.
 
 Libp2p protocol `/ipfs-observer-club/v1/{club}/snapshot`. The serving
 peer GETs `http://127.0.0.1:8002/api/snapshot` (classify, current
-alias, report, persistent skips). Unprocessable skips are omitted.
+alias, report, then `out_of_scope` skips if room remains). Directory
+and unprocessable skips are omitted. Documents win when the cap is
+tight. Default cap `snapshot_limit` = 20 000 lines. The requester verifies
 Default cap `snapshot_limit` = 20 000 lines. The requester verifies
 each line the same way as gossip. Snapshot is cooldown-limited per
 peer, not rate-limited per message.

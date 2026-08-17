@@ -336,7 +336,7 @@ def test_directory_is_forgotten(tmp_path, monkeypatch):
     )
     assert indexer.process_one(wconn, _discovered(wconn)) is True
     assert called == []
-    assert published == ["directory"]
+    assert published == []
     assert wconn.execute("SELECT COUNT(*) FROM cids").fetchone()[0] == 0
     evicted = wconn.execute("SELECT COUNT(*) FROM evicted").fetchone()[0]
     assert evicted == 1

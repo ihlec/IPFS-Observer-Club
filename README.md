@@ -17,7 +17,7 @@ file bytes.
    live skip for a CID, do not fetch, unless a `wrong` report asks nodes
    that have not classified it yet to do so. One classify still asks a
    second node to vote. `unprocessable` stays local and expires.
-   `out_of_scope` and `directory` are gossiped.
+   `out_of_scope` is gossiped. Directory skips stay local.
 2. **Claim** — a short lease before an LLM call. At most one in-flight
    claim per node. Your own lease does not park the CID.
 3. **First-block MIME** — stop assembling UnixFS if the bytes are not

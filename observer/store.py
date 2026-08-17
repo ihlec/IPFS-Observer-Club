@@ -820,32 +820,45 @@ def expire_claims(conn):
     conn.commit()
 
 
-def export_snapshot(conn, limit=20000):
-    """Signed message envelopes for late-joiner catch-up, oldest first.
+_SNAPSHOT_DOCS_SQL = (
+    "SELECT m.body FROM messages m "
+    "WHERE instr(m.body, '\"sig\":') > 0 "
+    "  AND ("
+    "    m.kind = 'classify' "
+    "    OR (m.kind = 'alias' AND EXISTS ("
+    "      SELECT 1 FROM aliases a WHERE a.payload_hash = m.payload_hash"
+    "    )) "
+    "    OR m.kind = 'report'"
+    "  ) "
+    "ORDER BY m.received_at DESC LIMIT ?"
+)
+_SNAPSHOT_SKIPS_SQL = (
+    "SELECT m.body FROM messages m "
+    "WHERE instr(m.body, '\"sig\":') > 0 "
+    "  AND m.kind = 'skip' "
+    "  AND EXISTS ("
+    "    SELECT 1 FROM skips s WHERE s.cid = m.cid "
+    "      AND s.reason IN ('out_of_scope', 'not_academic')"
+    "  ) "
+    "ORDER BY m.received_at DESC LIMIT ?"
+)
 
-    Unprocessable skips stay off the wire: they are local and they expire.
-    Classify and out-of-scope skip replicate.
+
+def export_snapshot(conn, limit=20000):
+    """Signed envelopes for late joiners. Documents first, then scope skips.
+
+    Directory and unprocessable skips stay off the wire. If the cap is
+    tight, classifies / aliases / reports win over out-of-scope skips.
     """
     limit = max(0, int(limit))
-    rows = conn.execute(
-        "SELECT m.body FROM messages m "
-        "WHERE instr(m.body, '\"sig\":') > 0 "
-        "  AND ("
-        "    m.kind = 'classify' "
-        "    OR (m.kind = 'alias' AND EXISTS ("
-        "      SELECT 1 FROM aliases a WHERE a.payload_hash = m.payload_hash"
-        "    )) "
-        "    OR (m.kind = 'skip' AND EXISTS ("
-        "      SELECT 1 FROM skips s WHERE s.cid = m.cid "
-        "        AND s.reason IN ('out_of_scope', 'not_academic', 'directory')"
-        "    )) "
-        "    OR m.kind = 'report'"
-        "  ) "
-        "ORDER BY m.received_at DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    lines = [r[0] for r in rows if r[0]]
-    lines.reverse()
+    docs = [r[0] for r in conn.execute(_SNAPSHOT_DOCS_SQL, (limit,)) if r[0]]
+    docs.reverse()
+    leftover = limit - len(docs)
+    skips = []
+    if leftover > 0:
+        skips = [r[0] for r in conn.execute(_SNAPSHOT_SKIPS_SQL, (leftover,)) if r[0]]
+        skips.reverse()
+    lines = docs + skips
     if not lines:
         return ""
     return "\n".join(lines) + "\n"

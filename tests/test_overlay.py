@@ -110,7 +110,24 @@ def test_export_snapshot_drops_unprocessable_skips(tmp_path, monkeypatch):
     assert CID_BLOG in body
     assert CID_SCOPE in body
     assert CID_PAPER in body
-    assert CID_DIR in body
+    assert CID_DIR not in body
+
+
+def test_export_snapshot_prefers_documents_over_skips(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    for i in range(3):
+        store.ingest_message(conn, {
+            "kind": "skip", "cid": cid_for("skip-%d" % i), "publisher": "p",
+            "reason": "out_of_scope", "v": 1, "sig": "s%d" % i,
+        }, received_at=i)
+    store.ingest_message(conn, {
+        "kind": "classify", "cid": CID_PAPER, "publisher": "p",
+        "field": "biology", "text_sha256": "x", "v": 1, "sig": "cc",
+    }, received_at=10)
+    body = store.export_snapshot(conn, 2)
+    assert CID_PAPER in body
+    assert body.index(CID_PAPER) < body.index("out_of_scope")
+    assert body.count("\n") == 2
 
 
 def test_export_snapshot_includes_current_alias(tmp_path, monkeypatch):

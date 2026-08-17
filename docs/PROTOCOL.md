@@ -56,7 +56,8 @@ a classify/skip lands. A node does not park a CID on its own lease.
 
 `reason` is `out_of_scope`, `directory`, or `unprocessable` (legacy
 academic gossip used `not_academic`; readers accept it as out of scope).
-Observers gossip `out_of_scope` and `directory`. Mime/binary
+Observers gossip `out_of_scope`. Directory skips stay local
+(`drop_directory` after the first block). Mime/binary
 `unprocessable` stays in the local work queue and expires after
 `fetch.skip_ttl_seconds` (default 6h). A skip never hides a live
 classify. Nodes skip fetch and LLM for a CID when a live skip or
@@ -167,8 +168,9 @@ verified payloads per `publisher`. Duplicates are dropped.
 
 Catch-up: libp2p protocol `/ipfs-observer-club/v1/{club}/snapshot`. A peer
 serves signed JSONL from `GET /api/snapshot` (classify, current `alias`,
-`report`, and persistent skips: `out_of_scope`, `directory`, legacy
-`not_academic`). Unprocessable skips are omitted.
+`report`, then `out_of_scope` / legacy `not_academic` skips if the cap
+allows). Unprocessable and directory skips are omitted. When the cap
+is tight, documents are kept first.
 The requester verifies each line the same way as gossip. Snapshot transfer
 is not rate-limited per message (it is cooldown-limited per peer).
 
