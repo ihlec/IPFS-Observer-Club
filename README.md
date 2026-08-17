@@ -52,7 +52,7 @@ make start     # clubd + observer (sniffer, indexer, web)
 ```
 
 - Search: http://127.0.0.1:8002
-- Admin (alias, club, peers, classifier, reports, optional password): http://127.0.0.1:8002/admin
+- Admin (alias, classifier, password, peers, reports, club): http://127.0.0.1:8002/admin
 - clubd identity: http://127.0.0.1:8003/id
 
 `config.toml`, `data/`, and `.secret` stay on the machine. They are not

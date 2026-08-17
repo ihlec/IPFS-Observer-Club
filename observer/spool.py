@@ -11,7 +11,7 @@ from . import cidutil, config, store, work
 
 log = logging.getLogger("spool")
 
-_SKIP_CODECS = frozenset(("libp2p-key", "json", "dag-json", "dag-pb", "dag-cbor"))
+_SKIP_CODECS = frozenset(("libp2p-key", "json", "dag-json", "dag-cbor"))
 _COMMIT_EVERY = 50
 
 

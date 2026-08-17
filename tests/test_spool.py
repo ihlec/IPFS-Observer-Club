@@ -65,7 +65,7 @@ def test_spool_holds_new_cids_at_queue_cap(tmp_path, monkeypatch):
     assert cids == {first, second}
 
 
-def test_spool_skips_dag_pb(tmp_path, monkeypatch):
+def test_spool_queues_dag_pb(tmp_path, monkeypatch):
     spool_dir = tmp_path / "spool"
     spool_dir.mkdir()
     monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
@@ -75,15 +75,16 @@ def test_spool_skips_dag_pb(tmp_path, monkeypatch):
     store._local.conn = None
     now = int(time.time())
     raw = cid_for("keep-raw")
-    folder = cid_pb_for("folder")
+    unixfs = cid_pb_for("paper")
     path = spool_dir / "cids-20260101-000000.jsonl"
     path.write_text("".join(
         json.dumps({"ts": now, "cid": cid, "peer": "12D3aaa"}) + "\n"
-        for cid in (folder, raw)
+        for cid in (unixfs, raw)
     ))
-    assert spool.run_once() == 1
-    rows = [r[0] for r in work.connect().execute("SELECT cid FROM cids")]
-    assert rows == [raw]
+    assert spool.run_once() == 2
+    rows = {r[0]: r[1] for r in work.connect().execute("SELECT cid, codec FROM cids")}
+    assert rows[raw] == "raw"
+    assert rows[unixfs] == "dag-pb"
 
 
 def test_spool_skips_catalogued_cid(tmp_path, monkeypatch):

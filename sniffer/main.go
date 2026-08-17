@@ -97,10 +97,11 @@ func main() {
 					continue
 				}
 				codec := e.Cid.Prefix().Codec
-				// Folders and identity blocks are not documents. Skipping
-				// them here keeps the spool small for every club peer.
-				if codec == 0x70 || codec == 0x71 || codec == 0x72 ||
-					codec == 0x0129 || codec == 0x0200 { // dag-pb, dag-cbor, libp2p-key, dag-json, json
+				// Identity / DAG-JSON / DAG-CBOR are not documents.
+				// dag-pb (UnixFS) is how IPFS stores files, including PDFs;
+				// directories are dropped after the first block in the observer.
+				if codec == 0x71 || codec == 0x72 ||
+					codec == 0x0129 || codec == 0x0200 { // dag-cbor, libp2p-key, dag-json, json
 					continue
 				}
 				c := e.Cid.String()

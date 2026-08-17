@@ -252,15 +252,6 @@ def prune(conn=None):
         for row in stale:
             forget_cid(conn, row[0])
             dropped += 1
-        folders = conn.execute(
-            "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
-            "AND IFNULL(source, 'sniff') != 'report' "
-            "AND codec = 'dag-pb' "
-            "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf'"
-        ).fetchall()
-        for row in folders:
-            forget_cid(conn, row[0])
-            dropped += 1
         extra = conn.execute(
             "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing')"
         ).fetchone()[0] - cap
@@ -269,7 +260,7 @@ def prune(conn=None):
                 "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
                 "AND IFNULL(source, 'sniff') != 'report' "
                 "ORDER BY "
-                "  CASE WHEN codec = 'raw' "
+                "  CASE WHEN codec IN ('raw', 'dag-pb') "
                 "         OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
                 "       THEN 1 ELSE 0 END ASC, "
                 "  last_seen ASC LIMIT ?",
@@ -330,7 +321,7 @@ def note_fetch(conn, cid, retrieved=None):
 
 
 _DOC_SQL = (
-    "(codec = 'raw' OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
+    "(codec IN ('raw', 'dag-pb') OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
     "OR IFNULL(source, 'sniff') = 'report')"
 )
 
@@ -352,7 +343,7 @@ def _select_discovered(conn, extra_where, min_peers, max_first_seen,
 
 
 def take_batch(conn, limit=5):
-    """Claim work. Sniffed folders stay out; review rows still run."""
+    """Claim work. UnixFS directories are dropped after fetch, not here."""
     now = time.time()
     max_first_seen = now - int(config.FETCH.get("min_age_seconds", 10))
     min_last_seen = now - max_age_seconds()

@@ -58,7 +58,7 @@ concurrency = 16
 min_peer_count = 1
 # Prefer CIDs wanted by this many peers; fall back to min_peer_count.
 prefer_min_peer_count = 2
-# Sniffed dag-pb (UnixFS folders) is not queued. Reports can still enqueue one.
+# Sniffed dag-pb (UnixFS files, including PDFs) is queued. Folders drop after fetch.
 max_retries = 1
 max_timeout_retries = 1
 min_age_seconds = 10

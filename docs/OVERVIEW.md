@@ -133,18 +133,21 @@ is ignored on this node only.
 Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
 
 - drops invalid CIDs and codecs `libp2p-key`, `json`, `dag-json`,
-  `dag-pb`, `dag-cbor` (UnixFS folders are not queued from Bitswap)
+  `dag-cbor` (not documents)
+- UnixFS `dag-pb` **is** queued: that is how IPFS stores PDFs. A
+  directory is dropped after the first block (`inode/directory` skip)
 - drops CIDs this node already marked locally unprocessable
 - stops advancing the spool offset when the live queue is at cap, so
   leftover WANTs wait instead of being pruned as overflow
 - counts distinct peers per CID; prefers `prefer_min_peer_count` (2),
   falls back to `min_peer_count` (1)
 
-Workers take **raw / `.pdf` first**. A `source=report` row (second vote
-or a `wrong` report) can still fetch dag-pb and survives prune/age.
+Workers take **raw / dag-pb / `.pdf` first**. A `source=report` row
+(second vote or a `wrong` report) survives prune/age.
 
-Prune drops sniffed rows older than `max_age_seconds` (900) and sniffed
-bare dag-pb. Cap is 400 live `discovered`/`processing` rows.
+Prune drops sniffed rows older than `max_age_seconds` (900). Cap is
+400 live `discovered`/`processing` rows. Folders are not pruned as a
+codec; they are forgotten after fetch via `drop_directory`.
 
 ## Skip-hook
 

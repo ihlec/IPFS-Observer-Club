@@ -32,54 +32,18 @@
     <div class="status" id="loginStatus"></div>
   </div>
 
-  <div class="section" id="passwordSection" hidden>
-    <h3>Admin password</h3>
-    <p class="hint" id="passwordHint">No password is set. Writes are localhost-only. Setting one stores a salted hash, not the password.</p>
-    <div class="row" id="currentPasswordRow" hidden>
-      <div style="flex:1;min-width:12em">
-        <input type="password" id="currentPassword" autocomplete="current-password" placeholder="current password">
-      </div>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <div style="flex:1;min-width:12em">
-        <input type="password" id="newPassword" autocomplete="new-password" placeholder="new password" onkeydown="if(event.key==='Enter')savePassword()">
-      </div>
-      <button type="button" class="btn btn-search" id="savePassword" onclick="savePassword()">Set password</button>
-      <button type="button" class="btn" id="clearPassword" hidden onclick="clearPassword()">Remove password</button>
-      <button type="button" class="btn" id="logoutBtn" hidden onclick="logout()">Log out</button>
-    </div>
-    <div class="status" id="passwordStatus"></div>
-  </div>
-
   <div id="adminFeatures" hidden>
   <div class="section">
-    <h3>Club</h3>
-    <p class="hint">One process joins one club. Saving writes <code>club.id</code> in config.toml. Restart to switch catalog and gossip.</p>
-    <p class="hint" id="clubNow">Joined: Academic</p>
+    <h3>Node alias</h3>
+    <p class="hint">Shown next to this node’s peer ID in Observer Ranking. Gossiped to the club. 32 characters or fewer.</p>
+    <p class="hint" id="peerId">Node ID: —</p>
     <div class="row">
-      <select id="club" style="width:auto;min-width:16em"></select>
-      <button type="button" class="btn btn-search" id="saveClub" onclick="saveClub()">Save club</button>
-    </div>
-    <div class="status" id="clubStatus"></div>
-  </div>
-
-  <div class="section">
-    <h3>Peers</h3>
-    <p class="hint">Invite another Observer with a multiaddr from its Admin → Peers (same club). Saving writes <code>club.bootstrap_peers</code> and dials now. On a LAN, mDNS still finds others. Prefer a LAN or public IP, not 127.0.0.1.</p>
-    <p class="hint" id="peerMesh">clubd: — · connected: none</p>
-    <p class="field-label">This node</p>
-    <div id="shareAddrs"><div class="empty" style="padding:12px 0">clubd is down</div></div>
-    <p class="field-label">Connected</p>
-    <div id="connectedPeers"><div class="empty" style="padding:12px 0">none</div></div>
-    <p class="field-label">Bootstrap peers</p>
-    <div id="bootstrapList"><div class="empty" style="padding:12px 0">none</div></div>
-    <div class="row" style="margin-top:12px">
       <div class="input-wrap" style="flex:1;min-width:0">
-        <input type="text" id="bootstrapAddr" placeholder="/ip4/…/tcp/4713/p2p/…" autocomplete="off" onkeydown="if(event.key==='Enter')addBootstrap()">
+        <input type="text" id="alias" maxlength="32" placeholder="e.g. berlin-lab">
       </div>
-      <button type="button" class="btn btn-search" id="addBootstrap" onclick="addBootstrap()">Add</button>
+      <button type="button" class="btn btn-search" id="saveAlias" onclick="saveAlias()">Save alias</button>
     </div>
-    <div class="status" id="bootstrapStatus"></div>
+    <div class="status" id="aliasStatus"></div>
   </div>
 
   <div class="section">
@@ -104,17 +68,42 @@
     <div class="status" id="llmStatus"></div>
   </div>
 
-  <div class="section">
-    <h3>Node alias</h3>
-    <p class="hint">Shown next to this node’s peer ID in Observer Ranking. Gossiped to the club. 32 characters or fewer.</p>
-    <p class="hint" id="peerId">Node ID: —</p>
-    <div class="row">
-      <div class="input-wrap" style="flex:1;min-width:0">
-        <input type="text" id="alias" maxlength="32" placeholder="e.g. berlin-lab">
+  <div class="section" id="passwordSection" hidden>
+    <h3>Admin password</h3>
+    <p class="hint" id="passwordHint">No password is set. Writes are localhost-only. Setting one stores a salted hash, not the password.</p>
+    <div class="row" id="currentPasswordRow" hidden>
+      <div style="flex:1;min-width:12em">
+        <input type="password" id="currentPassword" autocomplete="current-password" placeholder="current password">
       </div>
-      <button type="button" class="btn btn-search" id="saveAlias" onclick="saveAlias()">Save alias</button>
     </div>
-    <div class="status" id="aliasStatus"></div>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:1;min-width:12em">
+        <input type="password" id="newPassword" autocomplete="new-password" placeholder="new password" onkeydown="if(event.key==='Enter')savePassword()">
+      </div>
+      <button type="button" class="btn btn-search" id="savePassword" onclick="savePassword()">Set password</button>
+      <button type="button" class="btn" id="clearPassword" hidden onclick="clearPassword()">Remove password</button>
+      <button type="button" class="btn" id="logoutBtn" hidden onclick="logout()">Log out</button>
+    </div>
+    <div class="status" id="passwordStatus"></div>
+  </div>
+
+  <div class="section">
+    <h3>Peers</h3>
+    <p class="hint">Invite another Observer with a multiaddr from its Admin → Peers (same club). Saving writes <code>club.bootstrap_peers</code> and dials now. On a LAN, mDNS still finds others. Prefer a LAN or public IP, not 127.0.0.1.</p>
+    <p class="hint" id="peerMesh">clubd: — · connected: none</p>
+    <p class="field-label">This node</p>
+    <div id="shareAddrs"><div class="empty" style="padding:12px 0">clubd is down</div></div>
+    <p class="field-label">Connected</p>
+    <div id="connectedPeers"><div class="empty" style="padding:12px 0">none</div></div>
+    <p class="field-label">Bootstrap peers</p>
+    <div id="bootstrapList"><div class="empty" style="padding:12px 0">none</div></div>
+    <div class="row" style="margin-top:12px">
+      <div class="input-wrap" style="flex:1;min-width:0">
+        <input type="text" id="bootstrapAddr" placeholder="/ip4/…/tcp/4713/p2p/…" autocomplete="off" onkeydown="if(event.key==='Enter')addBootstrap()">
+      </div>
+      <button type="button" class="btn btn-search" id="addBootstrap" onclick="addBootstrap()">Add</button>
+    </div>
+    <div class="status" id="bootstrapStatus"></div>
   </div>
 
   <div class="section">
@@ -136,6 +125,17 @@
     <p class="hint">This node ignores classify, skip, claim, alias, and report from these observers.</p>
     <div id="blacklistList"><div class="empty">none</div></div>
     <div class="status" id="blacklistStatus"></div>
+  </div>
+
+  <div class="section">
+    <h3>Club</h3>
+    <p class="hint">One process joins one club. Saving writes <code>club.id</code> in config.toml. Restart to switch catalog and gossip.</p>
+    <p class="hint" id="clubNow">Joined: Academic</p>
+    <div class="row">
+      <select id="club" style="width:auto;min-width:16em"></select>
+      <button type="button" class="btn btn-search" id="saveClub" onclick="saveClub()">Save club</button>
+    </div>
+    <div class="status" id="clubStatus"></div>
   </div>
   </div>
 </div>
