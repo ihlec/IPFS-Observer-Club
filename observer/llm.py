@@ -40,6 +40,13 @@ PRESETS = (
         "model": "openai/gpt-oss-20b",
         "needs_key": True,
     },
+    {
+        "id": "cerebras",
+        "name": "Cerebras",
+        "base_url": "https://api.cerebras.ai/v1",
+        "model": "gpt-oss-120b",
+        "needs_key": True,
+    },
 )
 
 

@@ -179,6 +179,26 @@ def _retry_after(resp):
         return None
 
 
+def _response_detail(resp):
+    if resp is None:
+        return ""
+    try:
+        body = resp.json()
+    except (ValueError, TypeError):
+        text = (getattr(resp, "text", None) or "").strip()
+        return text[:200]
+    if not isinstance(body, dict):
+        return ""
+    err = body.get("error")
+    if isinstance(err, dict):
+        msg = err.get("message") or err.get("code") or ""
+    elif isinstance(err, str):
+        msg = err
+    else:
+        msg = body.get("message") or ""
+    return str(msg).strip()[:200]
+
+
 def _host_up(prov, host):
     now = time.monotonic()
     with host.lock:
@@ -420,6 +440,13 @@ def classify(text, mime, filename=None, codec=None):
                         continue
                     if status == 401:
                         host.pause(60, "classifier rejected the API key (HTTP 401)")
+                    elif status == 402:
+                        detail = _response_detail(e.response)
+                        reason = "classifier needs payment or quota (HTTP 402)"
+                        if detail:
+                            reason += ": " + detail
+                        host.pause(300, reason)
+                        log.info("%s quota/billing; trying next backend", prov["id"])
                     elif status == 429:
                         host.on_rate_limit(e.response)
                         log.info("%s rate-limited; trying next backend", prov["id"])

@@ -83,6 +83,34 @@ def test_classify_401_pauses(monkeypatch):
     assert classify.available() is False
 
 
+def test_classify_402_pauses(monkeypatch):
+    _one(monkeypatch)
+    posts = []
+
+    class _Resp:
+        status_code = 402
+        headers = {}
+
+        def json(self):
+            return {"error": {"message": "Payment required"}}
+
+        def raise_for_status(self):
+            err = requests.HTTPError("402")
+            err.response = self
+            raise err
+
+    monkeypatch.setattr(
+        classify._session, "post",
+        lambda *a, **k: posts.append(1) or _Resp(),
+    )
+    assert classify.classify("hello", "text/plain") is None
+    assert classify.available() is False
+    host = classify._ensure_host("groq")
+    assert host.is_paused()
+    assert classify.classify("hello", "text/plain") is None
+    assert posts == [1]
+
+
 def test_paused_workers_do_not_post(monkeypatch):
     _one(monkeypatch)
     classify._ensure_host("groq").pause(30, "classifier rate-limited (HTTP 429)")

@@ -40,8 +40,8 @@ are per-club.
 - Go 1.25+
 - Python 3.9+
 - An OpenAI-compatible `/v1` chat API. [LM Studio](https://lmstudio.ai)
-  on localhost is the default. Groq, Academic Cloud, or another host can
-  be added under `/admin`.
+  on localhost is the default. Groq, Cerebras, Academic Cloud, or another
+  host can be added under `/admin`.
 
 ## Setup
 

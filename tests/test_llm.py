@@ -15,13 +15,17 @@ def test_seeds_lmstudio_from_config(tmp_path, monkeypatch):
     assert "1234" in cur["base_url"]
     pub = llm.public()
     ids = [p["id"] for p in pub["providers"]]
-    assert ids[:3] == ["lmstudio", "academiccloud", "groq"]
+    assert ids[:4] == ["lmstudio", "academiccloud", "groq", "cerebras"]
     assert all("api_key" not in p for p in pub["providers"])
     groq = next(p for p in pub["providers"] if p["id"] == "groq")
     assert groq["default_model"] == "openai/gpt-oss-20b"
     ac = next(p for p in pub["providers"] if p["id"] == "academiccloud")
     assert ac["default_model"] == "qwen3.6-35b-a3b"
     assert ac["default_base_url"] == "https://chat-ai.academiccloud.de/v1"
+    cerebras = next(p for p in pub["providers"] if p["id"] == "cerebras")
+    assert cerebras["default_model"] == "gpt-oss-120b"
+    assert cerebras["default_base_url"] == "https://api.cerebras.ai/v1"
+    assert cerebras["needs_key"] is True
 
 
 def test_switch_and_save_masks_key(tmp_path, monkeypatch):
@@ -51,6 +55,16 @@ def test_empty_key_keeps_existing(tmp_path, monkeypatch):
     llm.save_provider("groq", model="openai/gpt-oss-20b", api_key=None)
     groq = next(p for p in llm.enabled() if p["id"] == "groq")
     assert groq["api_key"] == "abc"
+
+
+def test_cerebras_preset_activates(tmp_path, monkeypatch):
+    _iso(tmp_path, monkeypatch)
+    llm.set_active("cerebras")
+    cur = llm.active()
+    assert cur["id"] == "cerebras"
+    assert cur["base_url"] == "https://api.cerebras.ai/v1"
+    assert cur["model"] == "gpt-oss-120b"
+    assert cur["needs_key"] is True
 
 
 def test_stop_clears_active(tmp_path, monkeypatch):
