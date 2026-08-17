@@ -179,8 +179,12 @@ def process_one(conn, row):
     if result.ok and (
         result.is_directory or result.mime_type == "inode/directory"
     ):
-        # Folders stay local. Named PDF children are queued; no tree walk.
-        n = work.enqueue_doc_children(getattr(result, "links", None), skip_cid=cid)
+        # Folders stay local. Named PDF children are queued; HAMT gets a
+        # short peek for *.pdf names only.
+        links = list(getattr(result, "links", None) or [])
+        if getattr(result, "unixfs_type", None) == "hamt-shard":
+            links = fetch.peek_hamt_pdfs(links, gateway_offset=max(attempts - 1, 0))
+        n = work.enqueue_doc_children(links, skip_cid=cid)
         work.drop_directory(conn, cid)
         _bump("dir_drops")
         if n:

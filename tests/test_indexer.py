@@ -385,6 +385,30 @@ def test_directory_enqueues_named_children(tmp_path, monkeypatch):
     assert row["filename"] == "paper.pdf"
 
 
+def test_hamt_directory_peeks_pdf_children(tmp_path, monkeypatch):
+    from tests.cids import cid_pb_for
+
+    wconn, _club = _dbs(tmp_path, monkeypatch)
+    pdf = cid_pb_for("paper")
+    result = FetchResult()
+    result.ok = True
+    result.is_directory = True
+    result.unixfs_type = "hamt-shard"
+    result.mime_type = "inode/directory"
+    result.links = [("aa", cid_pb_for("shard"))]
+    monkeypatch.setattr(indexer.fetch, "fetch_cid", lambda *a, **k: result)
+    monkeypatch.setattr(
+        indexer.fetch, "peek_hamt_pdfs",
+        lambda links, **k: [("paper.pdf", pdf)],
+    )
+    monkeypatch.setattr(indexer.clubd_client, "publish_skip", lambda *a, **k: True)
+    monkeypatch.setattr(indexer.classify, "classify", lambda *a, **k: {})
+    assert indexer.process_one(wconn, _discovered(wconn)) is True
+    row = wconn.execute("SELECT source, filename FROM cids WHERE cid=?", (pdf,)).fetchone()
+    assert row["source"] == "named"
+    assert row["filename"] == "paper.pdf"
+
+
 def test_short_pdf_goes_to_llm(tmp_path, monkeypatch):
     wconn, _club = _dbs(tmp_path, monkeypatch)
     called = []

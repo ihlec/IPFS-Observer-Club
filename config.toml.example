@@ -70,6 +70,10 @@ unixfs_reserve = 80
 # PDF children queued from a dropped UnixFS directory (no tree walk).
 max_dir_docs = 8
 max_named = 80
+# At most this many workers fetch sniffed folders at once. The rest take raw HTML.
+max_dir_probes = 4
+# HAMT shard blocks to peek for *.pdf names after a directory drop.
+max_hamt_blocks = 4
 # Local unprocessable skips expire so a later sighting can retry.
 skip_ttl_seconds = 21600
 

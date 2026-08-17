@@ -83,3 +83,22 @@ def test_css_prefix_fetches_no_children(monkeypatch):
     )
     fetch._assemble_file(node, child_fetches=got)
     assert got == []
+
+
+def test_peek_hamt_pdfs_reads_one_shard(monkeypatch):
+    from tests.cids import cid_pb_for
+
+    pdf = cid_pb_for("paper")
+    shard = cid_pb_for("shard")
+    got = []
+
+    class _Shard:
+        unixfs_type = "hamt-shard"
+        is_directory = True
+        links = [("paper.pdf", pdf)]
+
+    monkeypatch.setattr(fetch, "get_block", lambda cid, gateway_offset=0: got.append(cid) or b"block")
+    monkeypatch.setattr(unixfs, "parse_dag_pb", lambda block: _Shard())
+    out = fetch.peek_hamt_pdfs([("aa", shard)], max_blocks=1, max_pdfs=8)
+    assert got == [shard]
+    assert out == [("paper.pdf", pdf)]

@@ -69,6 +69,14 @@ def test_prune_inbox_drops_old_consumed(tmp_path, monkeypatch):
     assert str(old) not in offsets
 
 
+def test_clubd_snapshot_url_uses_loopback(monkeypatch):
+    monkeypatch.setattr(clubd_flags.config, "WEB_HOST", "0.0.0.0")
+    monkeypatch.setattr(clubd_flags.config, "WEB_PORT", 8002)
+    flags = clubd_flags.flags()
+    url = flags[flags.index("-snapshot-url") + 1]
+    assert url == "http://127.0.0.1:8002/api/snapshot"
+
+
 def test_clubd_flags_include_bootstrap(monkeypatch):
     monkeypatch.setitem(clubd_flags.config.CLUB, "bootstrap_peers", [
         "/ip4/1.2.3.4/tcp/4713/p2p/12D3",

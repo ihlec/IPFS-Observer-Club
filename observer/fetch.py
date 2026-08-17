@@ -92,6 +92,7 @@ class Sample(object):
         self.codec = None
         self.truncated = False
         self.is_directory = False
+        self.unixfs_type = None
         self.links = []
         self.error = None
 
@@ -309,6 +310,7 @@ def fetch_cid(cid, codec=None, attempt=0, depth=0):
 
     if node.is_directory:
         result.is_directory = True
+        result.unixfs_type = node.unixfs_type
         result.mime_type = "inode/directory"
         result.links = list(node.links)
         result.size = 0
@@ -321,3 +323,42 @@ def fetch_cid(cid, codec=None, attempt=0, depth=0):
     result.size = len(result.data)
     result.ok = True
     return result
+
+
+def peek_hamt_pdfs(links, max_blocks=None, max_pdfs=None, gateway_offset=0):
+    """Look at a few HAMT shard blocks for ``*.pdf`` names. No catalog row."""
+    max_blocks = int(
+        max_blocks if max_blocks is not None
+        else config.FETCH.get("max_hamt_blocks", 4)
+    )
+    max_pdfs = int(
+        max_pdfs if max_pdfs is not None
+        else config.FETCH.get("max_dir_docs", 8)
+    )
+    found = list(unixfs.doc_child_links(links, max_n=max_pdfs))
+    if len(found) >= max_pdfs or max_blocks <= 0:
+        return found
+    seen_pdf = {cid for _name, cid in found}
+    pending = []
+    for name, cid in links or ():
+        if cid and cid not in seen_pdf:
+            pending.append(cid)
+    blocks = 0
+    while pending and blocks < max_blocks and len(found) < max_pdfs:
+        cid = pending.pop(0)
+        block = get_block(cid, gateway_offset)
+        blocks += 1
+        if not block:
+            continue
+        try:
+            node = unixfs.parse_dag_pb(block)
+        except Exception:
+            continue
+        more = unixfs.doc_child_links(node.links, max_n=max_pdfs - len(found))
+        found.extend(more)
+        seen_pdf.update(cid for _name, cid in more)
+        if node.unixfs_type == "hamt-shard" or node.is_directory:
+            for _name, child in node.links:
+                if child and child not in seen_pdf and child not in pending:
+                    pending.append(child)
+    return found

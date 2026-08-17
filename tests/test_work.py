@@ -236,6 +236,53 @@ def test_prune_reserves_slots_from_raw(tmp_path, monkeypatch):
     assert len(left) == 8
 
 
+def test_take_batch_caps_sniffed_dir_probes(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_age=3600)
+    monkeypatch.setitem(work.config.FETCH, "max_dir_probes", 4)
+    monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 1)
+    now = time.time()
+    for i in range(4):
+        conn.execute(
+            "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+            "want_count, status, attempts) VALUES (?,?,?,?,1,1,'processing',0)",
+            ("bafy-busy-%d" % i, "dag-pb", now - 20, now - 5),
+        )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-pb", "dag-pb", now - 20, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-raw", "raw", now - 20, now - 5),
+    )
+    conn.commit()
+    rows = work.take_batch(conn, limit=1)
+    assert [r["cid"] for r in rows] == ["bafy-raw"]
+
+
+def test_take_batch_named_pdf_ignores_dir_probe_cap(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_age=3600)
+    monkeypatch.setitem(work.config.FETCH, "max_dir_probes", 0)
+    monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 1)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts, source, filename) "
+        "VALUES (?,?,?,?,1,1,'discovered',0,'named','paper.pdf')",
+        ("bafy-pdf", "dag-pb", now - 20, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-raw", "raw", now - 20, now - 5),
+    )
+    conn.commit()
+    rows = work.take_batch(conn, limit=1)
+    assert [r["cid"] for r in rows] == ["bafy-pdf"]
+
+
 def test_take_batch_prefers_named_pdf_over_dag_pb(tmp_path, monkeypatch):
     conn = _conn(tmp_path, monkeypatch, max_age=3600)
     now = time.time()

@@ -4,6 +4,14 @@ from __future__ import annotations
 from . import config
 
 
+def snapshot_host():
+    """clubd must dial a destination, not the web bind address."""
+    host = (config.WEB_HOST or "127.0.0.1").strip()
+    if host in ("0.0.0.0", "::", "[::]"):
+        return "127.0.0.1"
+    return host
+
+
 def flags():
     peers = config.normalize_bootstrap_peers(config.CLUB.get("bootstrap_peers") or [])
     out = [
@@ -13,7 +21,7 @@ def flags():
         "-identity", config.IDENTITY_PATH,
         "-inbox", config.INBOX_DIR,
         "-snapshot-url", "http://%s:%s/api/snapshot" % (
-            config.WEB_HOST, config.WEB_PORT),
+            snapshot_host(), config.WEB_PORT),
         "-rate", str(int(config.CLUB.get("max_msgs_per_peer_per_min", 60))),
         "-inbox-max-bytes", str(int(config.CLUB.get("inbox_max_bytes", 64 * 1024 * 1024))),
         "-inbox-keep-days", str(int(config.CLUB.get("inbox_keep_days", 7))),

@@ -58,7 +58,7 @@ a classify/skip lands. A node does not park a CID on its own lease.
 academic gossip used `not_academic`; readers accept it as out of scope).
 Observers gossip `out_of_scope`. Directory skips stay local
 (`drop_directory` after the first block; named PDF children may
-be queued). Mime/binary
+be queued, including a short HAMT peek). Mime/binary
 `unprocessable` stays in the local work queue and expires after
 `fetch.skip_ttl_seconds` (default 6h). A skip never hides a live
 classify. Nodes skip fetch and LLM for a CID when a live skip or

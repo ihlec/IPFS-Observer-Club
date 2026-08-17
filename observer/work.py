@@ -439,10 +439,14 @@ _DOC_SQL = (
     "(codec IN ('raw', 'dag-pb') OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
     "OR " + _KEEP_SRC + ")"
 )
-_UNIXFS_SQL = (
-    "(codec = 'dag-pb' OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
-    "OR " + _KEEP_SRC + ")"
+_NAMED_SQL = (
+    "(" + _KEEP_SRC + " OR lower(IFNULL(filename,'')) LIKE '%.pdf')"
 )
+_PROBE_SQL = (
+    "codec = 'dag-pb' AND NOT " + _KEEP_SRC + " "
+    "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf'"
+)
+_FILL_SQL = "(" + _DOC_SQL + ") AND NOT (" + _PROBE_SQL + ")"
 
 
 _TAKE_ORDER = (
@@ -490,8 +494,28 @@ def evict_for_unixfs(conn, n=1):
     return len(rows)
 
 
+def max_dir_probes():
+    return int(config.FETCH.get("max_dir_probes", 4))
+
+
+def dir_probe_count(conn=None):
+    """Sniffed dag-pb (folders) currently occupying a worker."""
+    conn = conn or connect()
+    with _db_lock:
+        return conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status = 'processing' "
+            "AND " + _PROBE_SQL,
+        ).fetchone()[0]
+
+
+def _extend(rows, extra):
+    seen = {r["cid"] for r in rows}
+    rows.extend(r for r in extra if r["cid"] not in seen)
+    return rows
+
+
 def take_batch(conn, limit=5):
-    """Claim work. UnixFS directories are dropped after fetch, not here."""
+    """Claim work. At most max_dir_probes sniffed folders in flight."""
     now = time.time()
     max_first_seen = now - int(config.FETCH.get("min_age_seconds", 10))
     min_last_seen = now - max_age_seconds()
@@ -504,19 +528,23 @@ def take_batch(conn, limit=5):
     args = (max_first_seen, min_last_seen, attempt_cap)
     with _db_lock:
         rows = list(_select_discovered(
-            conn, _UNIXFS_SQL, min_peers, *args, limit,
+            conn, _NAMED_SQL, min_peers, *args, limit,
         ))
         if len(rows) < limit:
+            room = max(0, max_dir_probes() - dir_probe_count(conn))
+            need_pb = min(limit - len(rows), room)
+            if need_pb:
+                _extend(rows, _select_discovered(
+                    conn, _PROBE_SQL, min_peers, *args, need_pb,
+                ))
+        if len(rows) < limit:
             need = limit - len(rows)
-            extra = _select_discovered(
-                conn, _DOC_SQL, prefer, *args, need,
-            )
+            extra = _select_discovered(conn, _FILL_SQL, prefer, *args, need)
             if not extra:
                 extra = _select_discovered(
-                    conn, _DOC_SQL, min_peers, *args, need,
+                    conn, _FILL_SQL, min_peers, *args, need,
                 )
-            seen = {r["cid"] for r in rows}
-            rows.extend(r for r in extra if r["cid"] not in seen)
+            _extend(rows, extra)
         if rows:
             conn.executemany(
                 "UPDATE cids SET status = 'processing' WHERE cid = ?",
