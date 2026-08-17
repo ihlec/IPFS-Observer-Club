@@ -66,6 +66,23 @@ def test_available_false_during_pause(monkeypatch):
     assert called == [1]
 
 
+def test_available_caches_ok_probe(monkeypatch):
+    _one(monkeypatch)
+    called = []
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(
+        classify._session, "get",
+        lambda *a, **k: called.append(1) or _Resp(),
+    )
+    assert classify.available() is True
+    assert classify.available() is True
+    assert called == [1]
+
+
 def test_classify_401_pauses(monkeypatch):
     _one(monkeypatch)
 

@@ -98,7 +98,7 @@ Restart after a club change.
 | classify (`llm` or `reuse`) | `classifies` + first-seen `docs` | yes |
 | skip `out_of_scope` (legacy `not_academic`) | `skips` | yes |
 | skip `directory` | work queue only (`drop_directory`) | no |
-| skip `unprocessable` | work queue only | no |
+| skip `unprocessable` (images, CSS, JS, short PDFs) | work queue only | no |
 | `llm_disagreed` | work queue, expires like unprocessable | no |
 | claim | `claims` keyed by **publisher** | yes, short lease |
 | report `wrong` / `abusive` / `clear` | `reports` keyed by `(cid, publisher)` | yes |
@@ -205,7 +205,7 @@ flowchart TD
   hook -->|must_classify or empty| fetch[CID-verified sample]
   fetch --> dir{UnixFS directory?}
   dir -->|yes| gdir["local drop_directory"]
-  dir -->|no| mime{PDF / HTML / plain with usable text?}
+  dir -->|no| mime{PDF / HTML / prose?}
   mime -->|no| loc["local unprocessable / remember binary"]
   mime -->|yes| fp{same text_sha256 and hook allows reuse?}
   fp -->|yes| reuse["gossip classify reuse"]

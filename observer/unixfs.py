@@ -124,3 +124,28 @@ def parse_dag_pb(block):
     node.is_directory = node.unixfs_type in ("directory", "hamt-shard")
     node.is_file = node.unixfs_type in ("file", "raw")
     return node
+
+
+_FILE_EXT = (
+    ".pdf", ".html", ".htm", ".txt", ".md", ".css", ".js", ".mjs", ".cjs",
+    ".ts", ".jsx", ".tsx", ".map", ".json", ".wasm", ".less", ".scss",
+)
+
+
+def pick_filename(names):
+    """Best UnixFS link name that looks like a file, or None."""
+    fallback = None
+    for raw in names or ():
+        if not raw:
+            continue
+        base = raw.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not base or base in (".", "..") or len(base) > 180:
+            continue
+        if base.isdigit():
+            continue
+        lower = base.lower()
+        if any(lower.endswith(ext) for ext in _FILE_EXT):
+            return base
+        if fallback is None:
+            fallback = base
+    return fallback

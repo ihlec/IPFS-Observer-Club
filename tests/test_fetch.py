@@ -67,3 +67,19 @@ def test_nested_unixfs_file_uses_inline_not_protobuf(monkeypatch):
     assert data.startswith(b"%PDF")
     assert b"protobuf-wrapper" not in data
     assert got == ["bafymid", "bafyleaf"]
+
+
+def test_css_prefix_fetches_no_children(monkeypatch):
+    got = []
+
+    def fake_get_block(cid, gateway_offset=0):
+        got.append(cid)
+        return b"child-bytes"
+
+    monkeypatch.setattr(fetch, "get_block", fake_get_block)
+    node = _Node(
+        b"@keyframes van-rotate{0%{opacity:1}to{opacity:0}}",
+        [("c1", "bafychild1")],
+    )
+    fetch._assemble_file(node, child_fetches=got)
+    assert got == []

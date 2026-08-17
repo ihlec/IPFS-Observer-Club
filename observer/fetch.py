@@ -102,6 +102,7 @@ class FetchResult(Sample):
         self.slow = False
         self.mime_type = None
         self.size = None
+        self.filename = None
 
 
 def _ipfs_api():
@@ -189,11 +190,12 @@ def get_block(cid, gateway_offset=0):
     return data
 
 
-def _assemble_file(root_node, gateway_offset=0, child_fetches=None):
+def _assemble_file(root_node, gateway_offset=0, child_fetches=None, names=None):
     """Gather file bytes up to a content-aware budget.
 
     Stops after the first sniffable prefix if the MIME is not processable.
     ``child_fetches`` if a list is appended once per child block GET.
+    ``names`` if a list is appended with UnixFS link names as they are walked.
     """
     out = bytearray(root_node.inline_data or b"")
     budget = MAX_BYTES
@@ -201,9 +203,12 @@ def _assemble_file(root_node, gateway_offset=0, child_fetches=None):
     sniffed = False
     truncated = False
     pending = list(root_node.links)
+    seen_names = names if names is not None else []
 
     def _apply_budget_from(buf):
-        mime = extract.sniff_mime(bytes(buf[:4096]))
+        mime = extract.sniff_mime(
+            bytes(buf[:4096]), filename=unixfs.pick_filename(seen_names),
+        )
         extra = MAX_CHILD_BLOCKS
         extra_budget = MAX_BYTES
         stop = not extract.processable(mime)
@@ -229,6 +234,8 @@ def _assemble_file(root_node, gateway_offset=0, child_fetches=None):
             if mime and not extract.processable(mime):
                 break
         _name, child_cid = pending.pop(0)
+        if _name:
+            seen_names.append(_name)
         block = get_block(child_cid, gateway_offset)
         if child_fetches is not None:
             child_fetches.append(child_cid)
@@ -306,7 +313,9 @@ def fetch_cid(cid, codec=None, attempt=0, depth=0):
         result.ok = True
         return result
 
-    result.data, result.truncated = _assemble_file(node, attempt)
+    names = [n for n, _ in node.links if n]
+    result.data, result.truncated = _assemble_file(node, attempt, names=names)
+    result.filename = unixfs.pick_filename(names)
     result.size = len(result.data)
     result.ok = True
     return result

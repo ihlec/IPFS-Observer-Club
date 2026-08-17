@@ -207,7 +207,7 @@ def _host_up(prov, host):
                 return False
             host.pause_until = 0.0
             host.avail_ts = None
-        ttl = 15.0 if host.avail_ok else 1.0
+        ttl = 60.0 if host.avail_ok else 5.0
         if host.avail_ts is not None and now - host.avail_ts < ttl:
             return host.avail_ok
         try:

@@ -117,6 +117,24 @@ def test_unprocessable_stays_local(tmp_path, monkeypatch):
     assert work.is_unprocessable(CID) is True
 
 
+def test_css_stays_local(tmp_path, monkeypatch):
+    wconn, _club = _dbs(tmp_path, monkeypatch)
+    published = []
+    monkeypatch.setattr(
+        indexer.fetch, "fetch_cid",
+        lambda *a, **k: _sample(b"@keyframes van-rotate{0%{opacity:1}}"),
+    )
+    monkeypatch.setattr(
+        indexer.clubd_client, "publish_skip",
+        lambda cid, mime, reason: published.append((cid, mime, reason)) or True,
+    )
+    monkeypatch.setattr(indexer.classify, "classify", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("llm")))
+    row = _discovered(wconn)
+    assert indexer.process_one(wconn, row) is True
+    assert published == []
+    assert work.is_unprocessable(CID) is True
+
+
 def test_fingerprint_reuse_skips_llm(tmp_path, monkeypatch):
     wconn, club = _dbs(tmp_path, monkeypatch)
     from observer import extract

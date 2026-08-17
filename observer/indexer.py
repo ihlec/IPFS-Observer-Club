@@ -193,16 +193,16 @@ def process_one(conn, row):
             work.mark(conn, cid, "discovered", error=result.error)
         return False
 
-    filename = None
+    filename = result.filename
     text, mime, license_name, _license_source = extract.extract_document(
-        result.data, result.mime_type
+        result.data, result.mime_type, filename=filename
     )
     size = result.size if result.size is not None else len(result.data or b"")
     result.data = b""
 
     if not extract.processable(mime) or not extract.usable_text(text, mime):
-        # Images stay off the live cap. Short PDFs can reappear later.
-        if extract.binary_mime(mime):
+        # Images and CSS/JS stay off the live cap. Short PDFs can reappear later.
+        if extract.sticky_skip_mime(mime):
             work.remember_binary(cid, mime)
         else:
             work.mark(conn, cid, "skipped", mime_type=mime, size=size,

@@ -168,8 +168,60 @@ _PROCESSABLE_EXACT = {
     "application/xhtml+xml",
 }
 
+_SOURCE_MIMES = frozenset((
+    "text/css",
+    "text/javascript",
+    "application/javascript",
+    "application/x-javascript",
+    "application/ecmascript",
+))
+_SOURCE_EXT = {
+    ".css": "text/css",
+    ".js": "application/javascript",
+    ".mjs": "application/javascript",
+    ".cjs": "application/javascript",
+    ".ts": "application/javascript",
+    ".jsx": "application/javascript",
+    ".tsx": "application/javascript",
+    ".less": "text/css",
+    ".scss": "text/css",
+    ".map": "application/json",
+    ".wasm": "application/wasm",
+}
+_WEBPACK_MARKERS = (
+    b"webpackJsonp", b"webpackChunk", b"__webpack", b"__WEBPACK",
+)
 
-def sniff_mime(data, header_mime=None):
+
+def _filename_ext_mime(filename):
+    name = (filename or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for ext, mime in _SOURCE_EXT.items():
+        if name.endswith(ext):
+            return mime
+    return None
+
+
+def _sniff_source(data):
+    """CSS / bundled JS that would otherwise sniff as text/plain."""
+    sample = data[:4096]
+    if any(marker in sample for marker in _WEBPACK_MARKERS):
+        return "application/javascript"
+    if re.search(
+        br"@keyframes\b|@media\s+[^{]+\{|@font-face\b|@import\s+(?:url\(|['\"])",
+        sample, re.I,
+    ):
+        return "text/css"
+    if sample.count(b"{") >= 8 and sample.count(b";") >= 15:
+        n = max(len(sample), 1)
+        if sample.count(b" ") / n <= 0.12:
+            return "application/javascript"
+    return None
+
+
+def sniff_mime(data, header_mime=None, filename=None):
+    named = _filename_ext_mime(filename)
+    if named:
+        return named
     if data.startswith(b"RIFF") and len(data) >= 12:
         sub = data[8:12]
         if sub == b"WEBP":
@@ -190,6 +242,9 @@ def sniff_mime(data, header_mime=None):
             return "application/json"
         except (ValueError, UnicodeDecodeError):
             pass
+    source = _sniff_source(data)
+    if source:
+        return source
     if header_mime and header_mime not in ("application/octet-stream", ""):
         return header_mime
     sample = data[:4096]
@@ -210,10 +265,20 @@ def binary_mime(mime):
     return bool(mime) and mime.startswith(("image/", "video/", "audio/"))
 
 
+def source_mime(mime):
+    """Frontend assets that must not reach the classifier."""
+    return mime in _SOURCE_MIMES
+
+
+def sticky_skip_mime(mime):
+    """True when this CID should stay off the live queue (images, CSS, JS)."""
+    return binary_mime(mime) or source_mime(mime)
+
+
 def processable(mime):
     if not mime:
         return False
-    if binary_mime(mime):
+    if sticky_skip_mime(mime):
         return False
     return mime in _PROCESSABLE_EXACT
 
@@ -260,9 +325,9 @@ def _pdf_text(data):
         return "", (None, None)
 
 
-def extract_document(data, mime=None):
+def extract_document(data, mime=None, filename=None):
     """Return (text, mime, license, license_source). Bytes stay in memory."""
-    mime = sniff_mime(data, mime)
+    mime = sniff_mime(data, mime, filename=filename)
     if not processable(mime) or not data:
         return "", mime, None, None
     license_name, license_source = None, None
