@@ -271,8 +271,7 @@ Search FTS reads **`docs`** (first-seen classify). The UI overwrites
 - one ballot per publisher (latest classify)
 - `reuse` does not vote; if a CID has only reuse rows, those are used
 - `field` and `topic`: plurality winner
-- keywords: with two or more voters, a term needs roughly majority
-  support (at least 2) or it drops; at most 10 terms
+- keywords: more agreement first, split terms last; at most 10 terms
 
 So the skip-hook and the search index can show the first publisher’s
 labels while the row on screen shows the vote.

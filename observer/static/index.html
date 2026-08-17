@@ -156,26 +156,26 @@ function exportCids() {
   if (q) params.set('q', q);
   window.location.href = '/api/export?' + params;
 }
-function fieldShare(r) {
-  const n = r.label_voters || 0;
-  if (n < 2 || !r.field) return '';
-  const votes = (r.field_votes || {})[r.field] || 0;
-  return ` ${votes}/${n}`;
+function copyCid(cid, el) {
+  const done = () => {
+    el.classList.add('copied');
+    setTimeout(() => el.classList.remove('copied'), 1200);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cid).then(done).catch(() => {});
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = cid;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) {}
+  document.body.removeChild(ta);
 }
-function topicShare(r) {
-  const n = r.label_voters || 0;
-  if (n < 2 || !r.topic) return '';
-  const key = String(r.topic).trim().toLowerCase();
-  const votes = (r.topic_votes || {})[key];
-  if (!votes) return '';
-  return ` ${votes}/${n}`;
-}
-function kwShare(r, keyword) {
-  const n = r.label_voters || 0;
-  if (n < 2) return '';
-  const votes = (r.keyword_votes || {})[String(keyword).trim().toLowerCase()];
-  if (!votes) return '';
-  return ` ${votes}/${n}`;
+function resultTitle(r) {
+  if (r.topic) return esc(r.topic);
+  if (r.filename) return esc(r.filename);
+  return 'Open on gateway';
 }
 function render(results) {
   const el = document.getElementById('results');
@@ -183,15 +183,16 @@ function render(results) {
   el.innerHTML = results.map(r => `
     <div class="result-item" data-cid="${esc(r.cid)}">
       <div class="result-main">
-        <a class="result-cid" href="https://dweb.link/ipfs/${esc(r.cid)}" target="_blank" rel="noopener">${esc(r.cid)}</a>
         <div class="meta">
           <b>${esc(r.mime_type || 'unknown')}</b>
-          ${r.field ? ' · <span class="field-link" onclick="searchFor(\'' + esc(r.field) + '\')">' + esc(r.field) + fieldShare(r) + '</span>' : ''}
+          ${r.field ? '<span>·</span> <span class="field-link" onclick="searchFor(\'' + esc(r.field) + '\')">' + esc(r.field) + '</span>' : ''}
+          <span>·</span>
+          <button type="button" class="result-cid" data-copy-cid="${esc(r.cid)}" title="Copy CID">${esc(r.cid)}</button>
         </div>
-        ${r.topic ? `<div class="result-title" onclick="searchFor('${esc(r.topic)}')">${esc(r.topic)}${topicShare(r)}</div>` : ''}
+        <a class="result-title" href="https://dweb.link/ipfs/${esc(r.cid)}" target="_blank" rel="noopener">${resultTitle(r)}</a>
         <div class="class-tags">
           ${(r.keywords||'').split(',').filter(k=>k.trim()).map(k =>
-            `<span class="kw-tag" onclick="searchFor('${esc(k.trim())}')">${esc(k.trim())}${kwShare(r, k.trim())}</span>`).join('')}
+            `<span class="kw-tag" onclick="searchFor('${esc(k.trim())}')">${esc(k.trim())}</span>`).join('')}
         </div>
       </div>
       <div class="result-actions">
@@ -212,6 +213,12 @@ function closeReportMenus(except) {
   });
 }
 function onResultsClick(ev) {
+  const copyBtn = ev.target.closest('[data-copy-cid]');
+  if (copyBtn) {
+    ev.preventDefault();
+    copyCid(copyBtn.getAttribute('data-copy-cid'), copyBtn);
+    return;
+  }
   const item = ev.target.closest('.result-item');
   if (!item) return;
   if (ev.target.closest('.report-btn')) {

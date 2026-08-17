@@ -1,8 +1,8 @@
 """Club-facing labels: vote across independent classifies of the same CID.
 
 Reuse copies are not votes. One ballot per publisher (latest classify).
-Field and topic show the unique winner. Keywords need enough support or
-they drop once several nodes have spoken.
+Field and topic show the unique winner. Keywords with more agreement
+come first; split labels go last.
 """
 from __future__ import annotations
 
@@ -96,13 +96,7 @@ def _winner(votes, display):
 def _keep_keywords(votes, display, n_voters):
     if not votes:
         return []
-    max_v = max(votes.values())
-    floor = 1
-    if n_voters >= 2:
-        floor = max(2, (max_v + 1) // 2)
-    kept = [(k, votes[k]) for k in votes if votes[k] >= floor]
-    if not kept:
-        kept = [(k, votes[k]) for k in votes if votes[k] == max_v]
+    kept = [(k, votes[k]) for k in votes]
     kept.sort(key=lambda kv: (-kv[1], kv[0]))
     return [display[k] for k, _ in kept[:10]]
 

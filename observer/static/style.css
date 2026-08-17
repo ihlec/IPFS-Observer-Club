@@ -176,21 +176,37 @@ input:focus, select:focus { outline: none; border-color: #000; }
   border-top: 1px solid #eee;
 }
 .reporter-row .result-cid { font-size: 0.8em; color: #666; }
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35em;
+  color: #666;
+  font-size: 0.8em;
+}
 .result-cid {
   font-family: inherit;
+  font-size: 0.85em;
   word-break: break-all;
   color: #333;
-  font-size: 0.85em;
   text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
 }
+.meta .result-cid { font-size: inherit; }
 .result-cid:hover { color: #000; text-decoration: underline; }
-.meta { color: #666; font-size: 0.8em; }
+.result-cid.copied { color: #000; text-decoration: underline; }
 .result-title {
+  display: inline-block;
   margin-top: 4px;
-  font-size: 0.95em;
+  font-size: 1.1em;
   font-weight: 700;
   color: #000;
-  cursor: pointer;
+  text-decoration: none;
 }
 .result-title:hover { text-decoration: underline; }
 .class-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }

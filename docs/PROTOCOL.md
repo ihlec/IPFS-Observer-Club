@@ -98,7 +98,7 @@ this node has published its own. A node that is not the sole voter fetches
 and runs the model (no fingerprint reuse) so display labels can vote.
 The web UI shows **voted labels**: one ballot per publisher (latest
 independent classify; `reuse` does not vote). `field` and `topic` show the
-unique winner; keywords need enough support or they drop.
+unique winner; keywords with more agreement come first.
 
 If the model sets `in_scope` false, the node does not publish a classify.
 A likely academic-origin prior does not override that. The CID stays

@@ -1,4 +1,4 @@
-"""Voted labels: majority in front, minority drops, reuse does not vote."""
+"""Voted labels: majority in front, minority last, reuse does not vote."""
 from observer import labels, store
 from tests.cids import cid_for
 
@@ -44,7 +44,9 @@ def test_majority_field_wins(tmp_path, monkeypatch):
     assert out["field_votes"]["physics"] == 1
     assert out["topic"].lower() == "crispr"
     assert "gene" in out["keywords"]
-    assert "fake" not in out["keywords"]
+    assert out["keywords"].split(", ")[0] == "gene"
+    assert "fake" in out["keywords"]
+    assert out["keywords"].split(", ").index("gene") < out["keywords"].split(", ").index("fake")
     assert out["label_voters"] == 3
 
 

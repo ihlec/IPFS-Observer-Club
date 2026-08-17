@@ -7,8 +7,14 @@ from . import indexer, labels, store
 
 
 def _fts_escape(query):
-    terms = [t.replace('"', '""') for t in query.split()]
-    return " ".join('"%s"' % t for t in terms)
+    """Quoted prefix tokens so 'bio' matches field/topic/keyword 'biology'."""
+    terms = []
+    for raw in query.split():
+        token = raw.replace('"', "")
+        if not token:
+            continue
+        terms.append('"%s"*' % token.replace('"', '""'))
+    return " ".join(terms)
 
 
 def _decorate(conn, row):

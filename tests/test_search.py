@@ -111,3 +111,17 @@ def test_abusive_report_hidden_from_search_and_browse(tmp_path, monkeypatch):
     browsed, total = search.browse(limit=10)
     assert total == 1
     assert [r["cid"] for r in browsed] == [CID2]
+
+
+def test_search_matches_label_prefixes(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    store.ingest_message(conn, {
+        "kind": "classify", "cid": CID1, "publisher": "first",
+        "field": "biology", "topic": "CRISPR off-target", "keywords": "genome",
+        "text_sha256": extract.fingerprint("a"), "v": 1,
+    }, received_at=1)
+    monkeypatch.setattr(search, "store", store)
+    assert [r["cid"] for r in search.search("bio")] == [CID1]
+    assert [r["cid"] for r in search.search("cris")] == [CID1]
+    assert [r["cid"] for r in search.search("geno")] == [CID1]
+    assert search.search("phys") == []
