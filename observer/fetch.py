@@ -31,7 +31,7 @@ _session.mount("http://", _adapter)
 
 CONNECT_TIMEOUT = int(config.FETCH.get("connect_timeout_seconds", 5))
 TIMEOUT = int(config.FETCH.get("request_timeout_seconds")
-              or config.FETCH.get("timeout_seconds", 10))
+              or config.FETCH.get("timeout_seconds", 6))
 MAX_BYTES = int(config.FETCH.get("max_bytes")
                 or config.FETCH.get("max_bytes_per_cid", 2097152))
 MAX_PDF_BYTES = int(config.FETCH.get("max_pdf_bytes", 8 * 1048576))
@@ -92,6 +92,7 @@ class Sample(object):
         self.codec = None
         self.truncated = False
         self.is_directory = False
+        self.links = []
         self.error = None
 
 
@@ -309,6 +310,7 @@ def fetch_cid(cid, codec=None, attempt=0, depth=0):
     if node.is_directory:
         result.is_directory = True
         result.mime_type = "inode/directory"
+        result.links = list(node.links)
         result.size = 0
         result.ok = True
         return result

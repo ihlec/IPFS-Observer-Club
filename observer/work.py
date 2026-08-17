@@ -12,7 +12,7 @@ import threading
 import time
 from contextlib import contextmanager
 
-from . import cidutil, config
+from . import cidutil, config, unixfs
 
 _db_lock = threading.RLock()
 _tls = threading.local()
@@ -95,6 +95,8 @@ class _Local:
 
 
 _local = _Local()
+
+_KEEP_SRC = "IFNULL(source, 'sniff') IN ('report', 'named')"
 
 
 def connect():
@@ -219,6 +221,53 @@ def drop_directory(conn, cid):
         conn.execute("DELETE FROM cids WHERE cid = ?", (cid,))
 
 
+def enqueue_doc_children(links, skip_cid=None):
+    """Queue PDF/HTML names from a dropped directory. Folder itself stays out."""
+    from . import store
+    max_n = int(config.FETCH.get("max_dir_docs", 8))
+    cap_named = int(config.FETCH.get("max_named", 80))
+    picked = unixfs.doc_child_links(links, max_n=max_n)
+    if not picked:
+        return 0
+    now = time.time()
+    min_age = int(config.FETCH.get("min_age_seconds", 10))
+    first = now - min_age - 1
+    n = 0
+    with locked() as conn:
+        named_n = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE IFNULL(source, 'sniff') = 'named' "
+            "AND status IN ('discovered', 'processing')"
+        ).fetchone()[0]
+        for filename, cid in picked:
+            if named_n >= cap_named:
+                break
+            if cid == skip_cid or not cidutil.valid(cid):
+                continue
+            if is_unprocessable(cid) or store.already_catalogued(cid):
+                continue
+            row = conn.execute(
+                "SELECT source, status FROM cids WHERE cid = ?", (cid,),
+            ).fetchone()
+            if row is not None:
+                conn.execute(
+                    "UPDATE cids SET filename = COALESCE(filename, ?) "
+                    "WHERE cid = ?",
+                    (filename, cid),
+                )
+                continue
+            if live_count(conn) >= max_queue() and not evict_for_unixfs(conn):
+                break
+            conn.execute(
+                "INSERT INTO cids (cid, codec, first_seen, last_seen, "
+                "peer_count, want_count, status, attempts, source, filename) "
+                "VALUES (?, ?, ?, ?, 1, 1, 'discovered', 0, 'named', ?)",
+                (cid, cidutil.codec_of(cid), first, now, filename),
+            )
+            named_n += 1
+            n += 1
+    return n
+
+
 def max_age_seconds():
     return int(config.FETCH.get("max_age_seconds", 900))
 
@@ -235,6 +284,15 @@ def prefer_min_peer_count():
     return int(config.FETCH.get("prefer_min_peer_count", 2))
 
 
+def unixfs_reserve():
+    """Live slots kept free of sniffed raw so dag-pb and named files can enter."""
+    cap = max_queue()
+    want = int(config.FETCH.get("unixfs_reserve", 80))
+    if want <= 0 or cap <= 0:
+        return 0
+    return min(want, max(0, cap // 5))
+
+
 def prune(conn=None):
     """Keep only recent WANTs. Stale IPFS CIDs are usually gone."""
     conn = conn or connect()
@@ -245,7 +303,7 @@ def prune(conn=None):
     with _db_lock:
         stale = conn.execute(
             "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
-            "AND IFNULL(source, 'sniff') != 'report' "
+            "AND NOT " + _KEEP_SRC + " "
             "AND last_seen < ?",
             (cutoff,),
         ).fetchall()
@@ -258,10 +316,12 @@ def prune(conn=None):
         if extra > 0:
             old = conn.execute(
                 "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
-                "AND IFNULL(source, 'sniff') != 'report' "
+                "AND NOT " + _KEEP_SRC + " "
                 "ORDER BY "
                 "  CASE WHEN codec = 'dag-pb' "
                 "         OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
+                "         OR lower(IFNULL(filename,'')) LIKE '%.html' "
+                "         OR lower(IFNULL(filename,'')) LIKE '%.htm' "
                 "       THEN 2 "
                 "       WHEN codec = 'raw' THEN 1 "
                 "       ELSE 0 END ASC, "
@@ -271,6 +331,32 @@ def prune(conn=None):
             for row in old:
                 forget_cid(conn, row[0])
                 dropped += 1
+        reserve = unixfs_reserve()
+        if reserve:
+            raw_cap = max(0, cap - reserve)
+            raw_n = conn.execute(
+                "SELECT COUNT(*) FROM cids WHERE status = 'discovered' "
+                "AND NOT " + _KEEP_SRC + " "
+                "AND IFNULL(codec, '') != 'dag-pb' "
+                "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf' "
+                "AND lower(IFNULL(filename,'')) NOT LIKE '%.html' "
+                "AND lower(IFNULL(filename,'')) NOT LIKE '%.htm'"
+            ).fetchone()[0]
+            overflow = raw_n - raw_cap
+            if overflow > 0:
+                old = conn.execute(
+                    "SELECT cid FROM cids WHERE status = 'discovered' "
+                    "AND NOT " + _KEEP_SRC + " "
+                    "AND IFNULL(codec, '') != 'dag-pb' "
+                    "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf' "
+                    "AND lower(IFNULL(filename,'')) NOT LIKE '%.html' "
+                    "AND lower(IFNULL(filename,'')) NOT LIKE '%.htm' "
+                    "ORDER BY last_seen ASC LIMIT ?",
+                    (overflow,),
+                ).fetchall()
+                for row in old:
+                    forget_cid(conn, row[0])
+                    dropped += 1
         n = expire_local_skips(conn)
     return dropped + n
 
@@ -333,11 +419,11 @@ def note_fetch(conn, cid, retrieved=None):
 
 _DOC_SQL = (
     "(codec IN ('raw', 'dag-pb') OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
-    "OR IFNULL(source, 'sniff') = 'report')"
+    "OR " + _KEEP_SRC + ")"
 )
 _UNIXFS_SQL = (
     "(codec = 'dag-pb' OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
-    "OR IFNULL(source, 'sniff') = 'report')"
+    "OR " + _KEEP_SRC + ")"
 )
 
 
@@ -348,7 +434,7 @@ def _select_discovered(conn, extra_where, min_peers, max_first_seen,
         "WHERE status = 'discovered' "
         "  AND peer_count >= ? "
         "  AND first_seen <= ? "
-        "  AND (last_seen >= ? OR IFNULL(source, 'sniff') = 'report') "
+        "  AND (last_seen >= ? OR " + _KEEP_SRC + ") "
         "  AND attempts < ? "
         "  AND IFNULL(codec, '') NOT IN ('libp2p-key', 'json', 'dag-json') "
         "  AND " + extra_where + " "
@@ -362,8 +448,11 @@ def evict_for_unixfs(conn, n=1):
     """Free live slots occupied by raw WANTs so a UnixFS file can be queued."""
     rows = conn.execute(
         "SELECT cid FROM cids WHERE status = 'discovered' "
-        "AND IFNULL(source, 'sniff') != 'report' "
+        "AND NOT " + _KEEP_SRC + " "
         "AND IFNULL(codec, '') != 'dag-pb' "
+        "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf' "
+        "AND lower(IFNULL(filename,'')) NOT LIKE '%.html' "
+        "AND lower(IFNULL(filename,'')) NOT LIKE '%.htm' "
         "ORDER BY last_seen ASC LIMIT ?",
         (n,),
     ).fetchall()

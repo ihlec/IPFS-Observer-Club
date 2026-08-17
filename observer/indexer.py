@@ -33,8 +33,8 @@ _claimed_until = 0.0
 _clubd_down_logged = False
 _stats_lock = threading.Lock()
 _STAT_KEYS = (
-    "fetched", "mime_skips", "dir_drops", "heuristic_skips",
-    "llm_skips", "llm_classifies", "reuse",
+    "fetched", "mime_skips", "dir_drops", "named",
+    "heuristic_skips", "llm_skips", "llm_classifies", "reuse",
 )
 _run_stats = {k: 0 for k in _STAT_KEYS}
 _window = {k: 0 for k in _STAT_KEYS}
@@ -45,10 +45,10 @@ def runtime_stats():
         return dict(_run_stats)
 
 
-def _bump(key):
+def _bump(key, n=1):
     with _stats_lock:
-        _run_stats[key] = _run_stats.get(key, 0) + 1
-        _window[key] = _window.get(key, 0) + 1
+        _run_stats[key] = _run_stats.get(key, 0) + n
+        _window[key] = _window.get(key, 0) + n
 
 
 def log_summary(dropped=0):
@@ -60,11 +60,12 @@ def log_summary(dropped=0):
     q = work.stats()
     log.info(
         "fetched=%d heuristic=%d llm_skip=%d classified=%d reuse=%d "
-        "mime=%d dirs=%d queue=%d dropped=%d %s",
+        "mime=%d dirs=%d named=%d queue=%d dropped=%d %s",
         snap.get("fetched", 0), snap.get("heuristic_skips", 0),
         snap.get("llm_skips", 0), snap.get("llm_classifies", 0),
         snap.get("reuse", 0), snap.get("mime_skips", 0),
-        snap.get("dir_drops", 0), q.get("backlog", 0), int(dropped or 0),
+        snap.get("dir_drops", 0), snap.get("named", 0),
+        q.get("backlog", 0), int(dropped or 0),
         classify.backends_status(),
     )
 
@@ -178,9 +179,12 @@ def process_one(conn, row):
     if result.ok and (
         result.is_directory or result.mime_type == "inode/directory"
     ):
-        # Folders stay local. Gossiping them crowds out classifies.
+        # Folders stay local. Named PDF/HTML children are queued; no tree walk.
+        n = work.enqueue_doc_children(getattr(result, "links", None), skip_cid=cid)
         work.drop_directory(conn, cid)
         _bump("dir_drops")
+        if n:
+            _bump("named", n)
         return True
     if not result.ok:
         generic_max = int(config.FETCH.get("max_retries", 1)) + 1
@@ -388,7 +392,7 @@ def worker_loop(stop_event):
 
 
 class SnifferManager:
-    """Start/stop the Bitswap sniffer from the live work-queue cap."""
+    """Keep the Bitswap sniffer running. Queue cap is spool/work backpressure."""
 
     def __init__(self, stop_event):
         self.stop_event = stop_event
@@ -438,18 +442,11 @@ class SnifferManager:
             log.error("sniffer binary missing at %s - run 'make build'; "
                       "continuing without discovery", config.SNIFFER_BIN)
             return
-        conn = work.connect()
         self.start()
         while not self.stop_event.is_set():
             try:
-                live = work.live_count(conn)
-                cap = work.max_queue()
-                low = int(config.CONTROL.get("backlog_low", 200))
-                if self.running() and live >= cap:
-                    log.info("live queue %d >= %d: pausing discovery", live, cap)
-                    self.stop()
-                elif not self.running() and live <= low:
-                    log.info("live queue %d: resuming discovery", live)
+                if not self.running():
+                    log.warning("sniffer exited, restarting")
                     self.start()
             except Exception:
                 log.exception("sniffer control check failed")

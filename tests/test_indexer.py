@@ -360,6 +360,26 @@ def test_directory_is_forgotten(tmp_path, monkeypatch):
     assert evicted == 1
 
 
+def test_directory_enqueues_named_children(tmp_path, monkeypatch):
+    from tests.cids import cid_pb_for
+
+    wconn, _club = _dbs(tmp_path, monkeypatch)
+    pdf = cid_pb_for("paper")
+    result = FetchResult()
+    result.ok = True
+    result.is_directory = True
+    result.mime_type = "inode/directory"
+    result.links = [("paper.pdf", pdf), ("photo.jpg", cid_pb_for("jpg"))]
+    monkeypatch.setattr(indexer.fetch, "fetch_cid", lambda *a, **k: result)
+    monkeypatch.setattr(indexer.clubd_client, "publish_skip", lambda *a, **k: True)
+    monkeypatch.setattr(indexer.classify, "classify", lambda *a, **k: {})
+    assert indexer.process_one(wconn, _discovered(wconn)) is True
+    assert wconn.execute("SELECT cid FROM cids WHERE cid=?", (CID,)).fetchone() is None
+    row = wconn.execute("SELECT source, filename FROM cids WHERE cid=?", (pdf,)).fetchone()
+    assert row["source"] == "named"
+    assert row["filename"] == "paper.pdf"
+
+
 def test_short_pdf_goes_to_llm(tmp_path, monkeypatch):
     wconn, _club = _dbs(tmp_path, monkeypatch)
     called = []

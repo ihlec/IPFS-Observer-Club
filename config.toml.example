@@ -49,9 +49,9 @@ gateways = [
 max_bytes = 2097152
 max_pdf_bytes = 8388608
 max_child_blocks = 6
-timeout_seconds = 10
+timeout_seconds = 6
 connect_timeout_seconds = 5
-request_timeout_seconds = 10
+request_timeout_seconds = 6
 rate_limit_kbps = 1500
 # Fetch workers. Several classifier hosts can be active at once (/admin).
 concurrency = 16
@@ -65,6 +65,11 @@ min_age_seconds = 10
 # Only fetch recently sniffed CIDs. Older WANTs are usually gone.
 max_age_seconds = 900
 max_queue = 400
+# Keep this many live slots free of sniffed raw so dag-pb / named files can enter.
+unixfs_reserve = 80
+# PDF/HTML children queued from a dropped UnixFS directory (no tree walk).
+max_dir_docs = 8
+max_named = 80
 # Local unprocessable skips expire so a later sighting can retry.
 skip_ttl_seconds = 21600
 
@@ -75,8 +80,7 @@ min_free_disk_mb = 10240
 janitor_interval_seconds = 30
 
 [control]
-# Pause Bitswap when the live queue hits fetch.max_queue; resume here.
-backlog_low = 200
+# Sniffer stays up. Spool ingest holds extra raw WANTs at fetch.max_queue.
 check_interval_seconds = 30
 
 [llm]

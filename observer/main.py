@@ -1,8 +1,8 @@
 """Supervisor: ingest gossip, sniff Bitswap, classify, web UI.
 
 clubd (Go) is a sibling process started by the Makefile so libp2p can
-crash-restart independently of Python. The Bitswap sniffer is managed here
-so discovery pauses when the live work queue is at cap.
+crash-restart independently of Python. The Bitswap sniffer stays up;
+the work queue refuses extra raw WANTs when it is at cap.
 """
 import logging
 import resource

@@ -130,6 +130,25 @@ _FILE_EXT = (
     ".pdf", ".html", ".htm", ".txt", ".md", ".css", ".js", ".mjs", ".cjs",
     ".ts", ".jsx", ".tsx", ".map", ".json", ".wasm", ".less", ".scss",
 )
+_DOC_CHILD_EXT = (".pdf", ".html", ".htm")
+
+
+def doc_child_links(links, max_n=8):
+    """PDF/HTML children of a UnixFS directory. No tree walk."""
+    out = []
+    for name, cid in links or ():
+        if len(out) >= max_n:
+            break
+        if not name or not cid:
+            continue
+        base = name.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not base or base in (".", "..") or len(base) > 180:
+            continue
+        lower = base.lower()
+        if not any(lower.endswith(ext) for ext in _DOC_CHILD_EXT):
+            continue
+        out.append((base, cid))
+    return out
 
 
 def pick_filename(names):

@@ -24,10 +24,10 @@ classify path, labels, reports, and catch-up. Defaults below are from
 
 ## Processes
 
-`make start` launches **clubd**, then **observer**. Observer starts and
-pauses the **sniffer** so Bitswap intake stops when the live work queue
-is at cap (`fetch.max_queue` = 400) and resumes at `control.backlog_low`
-(200).
+`make start` launches **clubd**, then **observer**. Observer keeps the
+**sniffer** running. When the live work queue is at cap
+(`fetch.max_queue` = 400), spool ingest skips new raw WANTs and evicts
+raw to admit `dag-pb`; Bitswap peers stay connected.
 
 ```mermaid
 flowchart LR
@@ -136,7 +136,9 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
 - drops invalid CIDs and codecs `libp2p-key`, `json`, `dag-json`,
   `dag-cbor` (not documents)
 - UnixFS `dag-pb` **is** queued: that is how IPFS stores PDFs. A
-  directory is dropped after the first block and is **not** gossiped
+  directory is dropped after the first block and is **not** gossiped.
+  PDF/HTML children named in that block are queued (`source=named`, at
+  most `max_dir_docs` per folder, `max_named` live). No tree walk.
 - drops CIDs this node already marked locally unprocessable
 - at cap, **skips new raw** WANTs and **evicts raw** to admit `dag-pb`
   (Bitswap is mostly raw leaves; FIFO would starve PDF roots). New
@@ -145,12 +147,13 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
   falls back to `min_peer_count` (1)
 
 Workers take **`dag-pb` before raw**, even when the raw CID has more
-peers. A `source=report` row (second vote or a `wrong` report)
-survives prune/age.
+peers. A `source=report` row (second vote or a `wrong` report) or
+`source=named` (PDF/HTML from a dropped folder) survives prune/age.
 
 Prune drops sniffed rows older than `max_age_seconds` (900). Cap is
-400 live `discovered`/`processing` rows. Folders are not pruned as a
-codec; they are forgotten after fetch via `drop_directory`.
+400 live `discovered`/`processing` rows. `unixfs_reserve` (80) keeps
+that many slots free of sniffed raw. Folders are forgotten after fetch
+via `drop_directory`. Gateway fetches give up after 6s.
 
 ## Skip-hook
 
@@ -204,7 +207,8 @@ flowchart TD
   hook -->|foreign claim| wait[return to discovered]
   hook -->|must_classify or empty| fetch[CID-verified sample]
   fetch --> dir{UnixFS directory?}
-  dir -->|yes| gdir["local drop_directory"]
+  dir -->|yes| named["queue named .pdf/.html children"]
+  named --> gdir["local drop_directory"]
   dir -->|no| mime{PDF / HTML / prose?}
   mime -->|no| loc["local unprocessable / remember binary"]
   mime -->|yes| fp{same text_sha256 and hook allows reuse?}
