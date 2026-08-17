@@ -83,8 +83,8 @@ data/
   session.key           admin cookie HMAC
   {club}/
     club.sqlite         verified gossip (catalog)
+    inbox-offsets.json  ingest cursor (not in the jsonl dir)
     inbox/YYYY-MM-DD.jsonl
-    inbox/.offsets.json
 ```
 
 `config.toml`, `data/`, and `.secret` are not in git. Switching

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import time
 
 from . import config, store
@@ -12,26 +13,49 @@ log = logging.getLogger("ingest")
 
 
 def _offset_path():
+    """Python ingest cursor. Kept next to the catalog, not in clubd's jsonl dir."""
+    parent = os.path.dirname(config.INBOX_DIR.rstrip(os.sep)) or "."
+    return os.path.join(parent, "inbox-offsets.json")
+
+
+def _legacy_offset_path():
     return os.path.join(config.INBOX_DIR, ".offsets.json")
 
 
 def _load_offsets():
-    p = _offset_path()
-    if not os.path.exists(p):
-        return {}
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    for p in (_offset_path(), _legacy_offset_path()):
+        if not os.path.isfile(p):
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except (OSError, ValueError):
+            continue
+    return {}
 
 
 def _save_offsets(offsets):
-    os.makedirs(config.INBOX_DIR, exist_ok=True)
-    tmp = _offset_path() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(offsets, f)
-    os.replace(tmp, _offset_path())
+    path = _offset_path()
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    payload = json.dumps(offsets).encode("utf-8")
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-inbox-offsets-")
+    try:
+        os.write(fd, payload)
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        os.replace(tmp, path)
+    except Exception:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def drain_once():

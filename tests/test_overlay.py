@@ -36,6 +36,21 @@ def test_export_snapshot_signed_only(tmp_path, monkeypatch):
     assert '"sig":' in body
 
 
+def test_inbox_offsets_live_outside_jsonl_dir(tmp_path, monkeypatch):
+    inbox = tmp_path / "academic" / "inbox"
+    inbox.mkdir(parents=True)
+    monkeypatch.setattr(ingest.config, "INBOX_DIR", str(inbox))
+    key = str(inbox / "2026-08-17.jsonl")
+    ingest._save_offsets({key: 42})
+    stored = tmp_path / "academic" / "inbox-offsets.json"
+    assert stored.is_file()
+    assert not (inbox / ".offsets.json").exists()
+    assert ingest._load_offsets()[key] == 42
+    stored.unlink()
+    (inbox / ".offsets.json").write_text('{"legacy": 7}', encoding="utf-8")
+    assert ingest._load_offsets()["legacy"] == 7
+
+
 def test_prune_inbox_drops_old_consumed(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     inbox.mkdir()
