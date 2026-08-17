@@ -69,7 +69,7 @@ clubd: build
 	$(CLUBD) $(CLUBD_ARGS)
 
 sniff: build
-	$(SNIFFER) -port 4712 -low 50 -high 80 -spool data/spool
+	$(SNIFFER) -port 4712 -low 200 -high 400 -spool data/spool
 
 clean:
 	rm -rf build data/club.sqlite data/club.sqlite-* data/*/club.sqlite data/*/club.sqlite-* data/work.sqlite data/work.sqlite-* data/inbox/*.jsonl data/*/inbox/*.jsonl data/spool/*.jsonl

@@ -33,8 +33,8 @@ port = 8002
 [sniffer]
 # Passive Bitswap WANT listener. Never requests or serves content.
 listen_port = 4712
-low_connections = 50
-high_connections = 80
+low_connections = 200
+high_connections = 400
 discovery_interval_seconds = 30
 spool_dir = "data/spool"
 
@@ -65,15 +65,15 @@ min_age_seconds = 10
 # Only fetch recently sniffed CIDs. Older WANTs are usually gone.
 max_age_seconds = 900
 max_queue = 400
-# Keep this many live slots free of sniffed raw so dag-pb / named files can enter.
-unixfs_reserve = 80
+# Keep this many sniffed folders on the live queue. The rest of the cap is HTML/raw.
+max_dir_queue = 40
 # PDF children queued from a dropped UnixFS directory (no tree walk).
-max_dir_docs = 8
+max_dir_docs = 16
 max_named = 80
 # At most this many workers fetch sniffed folders at once. The rest take raw HTML.
 max_dir_probes = 4
 # HAMT shard blocks to peek for *.pdf names after a directory drop.
-max_hamt_blocks = 4
+max_hamt_blocks = 24
 # Local unprocessable skips expire so a later sighting can retry.
 skip_ttl_seconds = 21600
 

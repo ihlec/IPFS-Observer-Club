@@ -325,40 +325,71 @@ def fetch_cid(cid, codec=None, attempt=0, depth=0):
     return result
 
 
+def _spread(items, n):
+    """Evenly sample ``n`` items so a HAMT peek is not stuck on prefix ``00``."""
+    items = list(items)
+    if n <= 0 or not items:
+        return []
+    if len(items) <= n:
+        return items
+    step = len(items) / float(n)
+    picked = []
+    seen = set()
+    for i in range(n):
+        item = items[int(i * step)]
+        if item in seen:
+            continue
+        seen.add(item)
+        picked.append(item)
+    return picked
+
+
 def peek_hamt_pdfs(links, max_blocks=None, max_pdfs=None, gateway_offset=0):
-    """Look at a few HAMT shard blocks for ``*.pdf`` names. No catalog row."""
+    """Look at HAMT shard blocks for ``*.pdf`` names. No catalog row."""
     max_blocks = int(
         max_blocks if max_blocks is not None
-        else config.FETCH.get("max_hamt_blocks", 4)
+        else config.FETCH.get("max_hamt_blocks", 24)
     )
     max_pdfs = int(
         max_pdfs if max_pdfs is not None
-        else config.FETCH.get("max_dir_docs", 8)
+        else config.FETCH.get("max_dir_docs", 16)
     )
     found = list(unixfs.doc_child_links(links, max_n=max_pdfs))
     if len(found) >= max_pdfs or max_blocks <= 0:
         return found
     seen_pdf = {cid for _name, cid in found}
-    pending = []
-    for name, cid in links or ():
-        if cid and cid not in seen_pdf:
-            pending.append(cid)
+    level = []
+    seen_level = set()
+    for _name, cid in links or ():
+        if cid and cid not in seen_pdf and cid not in seen_level:
+            level.append(cid)
+            seen_level.add(cid)
+    # Spend about a third of the budget per shard level so the walk goes down.
+    per_level = max(8, (max_blocks + 2) // 3)
     blocks = 0
-    while pending and blocks < max_blocks and len(found) < max_pdfs:
-        cid = pending.pop(0)
-        block = get_block(cid, gateway_offset)
-        blocks += 1
-        if not block:
-            continue
-        try:
-            node = unixfs.parse_dag_pb(block)
-        except Exception:
-            continue
-        more = unixfs.doc_child_links(node.links, max_n=max_pdfs - len(found))
-        found.extend(more)
-        seen_pdf.update(cid for _name, cid in more)
-        if node.unixfs_type == "hamt-shard" or node.is_directory:
-            for _name, child in node.links:
-                if child and child not in seen_pdf and child not in pending:
-                    pending.append(child)
+    while level and blocks < max_blocks and len(found) < max_pdfs:
+        room = max_blocks - blocks
+        wave = _spread(level, min(room, per_level, len(level)))
+        next_level = []
+        seen_next = set()
+        for cid in wave:
+            if blocks >= max_blocks or len(found) >= max_pdfs:
+                break
+            block = get_block(cid, gateway_offset)
+            blocks += 1
+            if not block:
+                continue
+            try:
+                node = unixfs.parse_dag_pb(block)
+            except Exception:
+                continue
+            more = unixfs.doc_child_links(node.links, max_n=max_pdfs - len(found))
+            found.extend(more)
+            seen_pdf.update(child for _name, child in more)
+            if node.unixfs_type == "hamt-shard" or node.is_directory:
+                for _name, child in node.links:
+                    if child and child not in seen_pdf and child not in seen_next:
+                        next_level.append(child)
+                        seen_next.add(child)
+        level = next_level
     return found

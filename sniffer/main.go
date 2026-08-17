@@ -40,8 +40,8 @@ type record struct {
 func main() {
 	var (
 		port     = flag.Int("port", 4712, "libp2p listen port")
-		lowConns = flag.Int("low", 50, "connection manager low watermark")
-		hiConns  = flag.Int("high", 80, "connection manager high watermark")
+		lowConns = flag.Int("low", 200, "connection manager low watermark")
+		hiConns  = flag.Int("high", 400, "connection manager high watermark")
 		spoolDir = flag.String("spool", "data/spool", "spool output directory")
 		interval = flag.Duration("interval", 30*time.Second, "peer discovery interval")
 	)

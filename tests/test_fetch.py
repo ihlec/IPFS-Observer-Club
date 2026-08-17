@@ -102,3 +102,57 @@ def test_peek_hamt_pdfs_reads_one_shard(monkeypatch):
     out = fetch.peek_hamt_pdfs([("aa", shard)], max_blocks=1, max_pdfs=8)
     assert got == [shard]
     assert out == [("paper.pdf", pdf)]
+
+
+def test_peek_hamt_pdfs_spreads_fanout(monkeypatch):
+    from tests.cids import cid_pb_for
+
+    shards = [cid_pb_for("s%d" % i) for i in range(8)]
+    pdfs = [cid_pb_for("p%d" % i) for i in range(8)]
+    got = []
+    nodes = {}
+    for i, shard in enumerate(shards):
+        class _Shard:
+            unixfs_type = "hamt-shard"
+            is_directory = True
+            links = [("paper.pdf", pdfs[i])]
+        nodes[shard] = _Shard()
+
+    monkeypatch.setattr(
+        fetch, "get_block",
+        lambda cid, gateway_offset=0: got.append(cid) or cid.encode(),
+    )
+    monkeypatch.setattr(unixfs, "parse_dag_pb", lambda block: nodes[block.decode()])
+    links = [("%02x" % i, shards[i]) for i in range(8)]
+    out = fetch.peek_hamt_pdfs(links, max_blocks=2, max_pdfs=8)
+    assert got == [shards[0], shards[4]]
+    assert out == [("paper.pdf", pdfs[0]), ("paper.pdf", pdfs[4])]
+
+
+def test_peek_hamt_pdfs_walks_second_level(monkeypatch):
+    from tests.cids import cid_pb_for
+
+    l1 = cid_pb_for("l1")
+    l2 = cid_pb_for("l2")
+    pdf = cid_pb_for("paper")
+    got = []
+
+    class _L1:
+        unixfs_type = "hamt-shard"
+        is_directory = True
+        links = [("bb", l2)]
+
+    class _L2:
+        unixfs_type = "hamt-shard"
+        is_directory = True
+        links = [("paper.pdf", pdf)]
+
+    nodes = {l1: _L1(), l2: _L2()}
+    monkeypatch.setattr(
+        fetch, "get_block",
+        lambda cid, gateway_offset=0: got.append(cid) or cid.encode(),
+    )
+    monkeypatch.setattr(unixfs, "parse_dag_pb", lambda block: nodes[block.decode()])
+    out = fetch.peek_hamt_pdfs([("aa", l1)], max_blocks=2, max_pdfs=8)
+    assert got == [l1, l2]
+    assert out == [("paper.pdf", pdf)]

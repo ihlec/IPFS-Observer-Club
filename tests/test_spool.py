@@ -38,7 +38,32 @@ def test_spool_ingest_records(tmp_path, monkeypatch):
     assert os.path.exists(path)  # active file kept
 
 
-def test_spool_skips_raw_at_cap_to_reach_unixfs(tmp_path, monkeypatch):
+def test_spool_evicts_folder_at_cap_to_admit_raw(tmp_path, monkeypatch):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
+    monkeypatch.setattr(work.config, "WORK_DB", str(tmp_path / "work.sqlite"))
+    monkeypatch.setattr(store.config, "DB_PATH", str(tmp_path / "club.sqlite"))
+    monkeypatch.setitem(work.config.FETCH, "max_queue", 1)
+    monkeypatch.setitem(work.config.FETCH, "max_dir_queue", 40)
+    work._local.conn = None
+    store._local.conn = None
+    now = int(time.time())
+    unixfs = cid_pb_for("folder")
+    raw = cid_for("page")
+    path = spool_dir / "cids-20260101-000000.jsonl"
+    path.write_text("".join(
+        json.dumps({"ts": now, "cid": cid, "peer": "12D3aaa"}) + "\n"
+        for cid in (unixfs, raw)
+    ))
+    assert spool.run_once() == 2
+    conn = work.connect()
+    rows = {r[0]: r[1] for r in conn.execute("SELECT cid, codec FROM cids")}
+    assert raw in rows and rows[raw] == "raw"
+    assert unixfs not in rows
+
+
+def test_spool_skips_folder_at_cap_when_raw_holds_slot(tmp_path, monkeypatch):
     spool_dir = tmp_path / "spool"
     spool_dir.mkdir()
     monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
@@ -49,20 +74,20 @@ def test_spool_skips_raw_at_cap_to_reach_unixfs(tmp_path, monkeypatch):
     store._local.conn = None
     now = int(time.time())
     raw = cid_for("held-raw")
-    unixfs = cid_pb_for("paper")
+    unixfs = cid_pb_for("folder")
     path = spool_dir / "cids-20260101-000000.jsonl"
     path.write_text("".join(
         json.dumps({"ts": now, "cid": cid, "peer": "12D3aaa"}) + "\n"
         for cid in (raw, unixfs)
     ))
-    assert spool.run_once() == 2
+    assert spool.run_once() == 1
     conn = work.connect()
     rows = {r[0]: r[1] for r in conn.execute("SELECT cid, codec FROM cids")}
-    assert unixfs in rows and rows[unixfs] == "dag-pb"
-    assert raw not in rows
+    assert raw in rows and rows[raw] == "raw"
+    assert unixfs not in rows
 
 
-def test_spool_holds_unixfs_at_cap_when_queue_is_unixfs(tmp_path, monkeypatch):
+def test_spool_skips_extra_folder_at_cap_without_holding_file(tmp_path, monkeypatch):
     spool_dir = tmp_path / "spool"
     spool_dir.mkdir()
     monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
@@ -84,6 +109,8 @@ def test_spool_holds_unixfs_at_cap_when_queue_is_unixfs(tmp_path, monkeypatch):
     assert [r[0] for r in conn.execute("SELECT cid FROM cids")] == [first]
     conn.execute("UPDATE cids SET status = 'indexed' WHERE cid = ?", (first,))
     conn.commit()
+    later = spool_dir / "cids-20260101-000001.jsonl"
+    later.write_text(json.dumps({"ts": now, "cid": second, "peer": "12D3aaa"}) + "\n")
     assert spool.run_once() == 1
     cids = {r[0] for r in conn.execute("SELECT cid FROM cids")}
     assert cids == {first, second}

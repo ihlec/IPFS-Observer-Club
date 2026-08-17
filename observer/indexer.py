@@ -418,8 +418,8 @@ class SnifferManager:
         args = [
             config.SNIFFER_BIN,
             "-port", str(int(s.get("listen_port", 4712))),
-            "-low", str(int(s.get("low_connections", 50))),
-            "-high", str(int(s.get("high_connections", 80))),
+            "-low", str(int(s.get("low_connections", 200))),
+            "-high", str(int(s.get("high_connections", 400))),
             "-spool", config.SPOOL_DIR,
             "-interval", "%ds" % int(s.get("discovery_interval_seconds", 30)),
         ]

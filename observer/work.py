@@ -224,7 +224,7 @@ def drop_directory(conn, cid):
 def enqueue_doc_children(links, skip_cid=None):
     """Queue PDF names from a dropped directory. Folder itself stays out."""
     from . import store
-    max_n = int(config.FETCH.get("max_dir_docs", 8))
+    max_n = int(config.FETCH.get("max_dir_docs", 16))
     cap_named = int(config.FETCH.get("max_named", 80))
     picked = unixfs.doc_child_links(links, max_n=max_n)
     now = time.time()
@@ -256,8 +256,9 @@ def enqueue_doc_children(links, skip_cid=None):
                     (filename, cid),
                 )
                 continue
-            if live_count(conn) >= max_queue() and not evict_for_unixfs(conn):
-                break
+            if live_count(conn) >= max_queue():
+                if not (evict_dir_probes(conn) or evict_for_unixfs(conn)):
+                    break
             conn.execute(
                 "INSERT INTO cids (cid, codec, first_seen, last_seen, "
                 "peer_count, want_count, status, attempts, source, filename) "
@@ -301,13 +302,9 @@ def prefer_min_peer_count():
     return int(config.FETCH.get("prefer_min_peer_count", 2))
 
 
-def unixfs_reserve():
-    """Live slots kept free of sniffed raw so dag-pb and named files can enter."""
-    cap = max_queue()
-    want = int(config.FETCH.get("unixfs_reserve", 80))
-    if want <= 0 or cap <= 0:
-        return 0
-    return min(want, max(0, cap // 5))
+def max_dir_queue():
+    """Live sniffed folders. Extra slots stay free for raw HTML."""
+    return int(config.FETCH.get("max_dir_queue", 40))
 
 
 def prune(conn=None):
@@ -337,38 +334,27 @@ def prune(conn=None):
                 "AND NOT " + _KEEP_SRC + " "
                 "ORDER BY "
                 "  CASE WHEN codec = 'dag-pb' "
-                "         OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
-                "         OR lower(IFNULL(filename,'')) LIKE '%.html' "
-                "         OR lower(IFNULL(filename,'')) LIKE '%.htm' "
-                "       THEN 2 "
+                "         AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf' "
+                "       THEN 0 "
                 "       WHEN codec = 'raw' THEN 1 "
-                "       ELSE 0 END ASC, "
+                "       ELSE 2 END ASC, "
                 "  last_seen ASC LIMIT ?",
                 (extra,),
             ).fetchall()
             for row in old:
                 forget_cid(conn, row[0])
                 dropped += 1
-        reserve = unixfs_reserve()
-        if reserve:
-            raw_cap = max(0, cap - reserve)
-            raw_n = conn.execute(
-                "SELECT COUNT(*) FROM cids WHERE status = 'discovered' "
-                "AND NOT " + _KEEP_SRC + " "
-                "AND IFNULL(codec, '') != 'dag-pb' "
-                "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf' "
-                "AND lower(IFNULL(filename,'')) NOT LIKE '%.html' "
-                "AND lower(IFNULL(filename,'')) NOT LIKE '%.htm'"
+        dir_cap = max_dir_queue()
+        if dir_cap:
+            dir_n = conn.execute(
+                "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+                "AND " + _PROBE_SQL,
             ).fetchone()[0]
-            overflow = raw_n - raw_cap
+            overflow = dir_n - dir_cap
             if overflow > 0:
                 old = conn.execute(
                     "SELECT cid FROM cids WHERE status = 'discovered' "
-                    "AND NOT " + _KEEP_SRC + " "
-                    "AND IFNULL(codec, '') != 'dag-pb' "
-                    "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf' "
-                    "AND lower(IFNULL(filename,'')) NOT LIKE '%.html' "
-                    "AND lower(IFNULL(filename,'')) NOT LIKE '%.htm' "
+                    "AND " + _PROBE_SQL + " "
                     "ORDER BY last_seen ASC LIMIT ?",
                     (overflow,),
                 ).fetchall()
@@ -496,6 +482,29 @@ def evict_for_unixfs(conn, n=1):
 
 def max_dir_probes():
     return int(config.FETCH.get("max_dir_probes", 4))
+
+
+def dir_queue_count(conn=None):
+    """Sniffed folders occupying the live queue."""
+    conn = conn or connect()
+    with _db_lock:
+        return conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _PROBE_SQL,
+        ).fetchone()[0]
+
+
+def evict_dir_probes(conn, n=1):
+    """Free live slots occupied by sniffed folders."""
+    rows = conn.execute(
+        "SELECT cid FROM cids WHERE status = 'discovered' "
+        "AND " + _PROBE_SQL + " "
+        "ORDER BY last_seen ASC LIMIT ?",
+        (n,),
+    ).fetchall()
+    for row in rows:
+        forget_cid(conn, row[0])
+    return len(rows)
 
 
 def dir_probe_count(conn=None):

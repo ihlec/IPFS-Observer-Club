@@ -133,7 +133,7 @@ _FILE_EXT = (
 _DOC_CHILD_EXT = (".pdf",)
 
 
-def doc_child_links(links, max_n=8):
+def doc_child_links(links, max_n=16):
     """PDF children of a UnixFS directory. No tree walk. HTML is sniffed as raw."""
     out = []
     for name, cid in links or ():

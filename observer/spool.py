@@ -46,13 +46,14 @@ def _record(conn, line):
         return 0, 1
 
     queued = conn.execute("SELECT 1 FROM cids WHERE cid = ?", (cid,)).fetchone()
-    if queued is None and work.at_cap(conn):
-        # Bitswap WANTs are mostly raw leaves. Holding the offset there
-        # starves UnixFS file roots (PDFs) sitting in later spool files.
-        if codec != "dag-pb":
-            return 0, 1
-        if not work.evict_for_unixfs(conn):
-            return None
+    if queued is None:
+        if codec == "dag-pb":
+            # Folders must not fill the live cap. Raw HTML needs the slots.
+            if work.dir_queue_count(conn) >= work.max_dir_queue() or work.at_cap(conn):
+                return 0, 1
+        elif work.at_cap(conn):
+            if not work.evict_dir_probes(conn):
+                return 0, 1
 
     conn.execute(
         "INSERT OR IGNORE INTO seen_cids(cid, first_seen) VALUES (?, ?)",
@@ -107,8 +108,7 @@ def _save_offset(conn, path, offset):
 def ingest_file(conn, path, final=False):
     """Import one spool file. Commits in small batches so workers are not blocked.
 
-    Stops without advancing the offset when the live queue is at cap, so
-    leftover WANTs wait instead of being pruned as overflow.
+    Extra sniffed folders are skipped so later raw WANTs can still enter.
     """
     inserted = skipped = 0
     paused = False

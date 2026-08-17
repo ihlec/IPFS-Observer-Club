@@ -9,7 +9,7 @@ def _conn(tmp_path, monkeypatch, max_queue=80, max_age=900):
     monkeypatch.setitem(work.config.FETCH, "max_queue", max_queue)
     monkeypatch.setitem(work.config.FETCH, "max_age_seconds", max_age)
     monkeypatch.setitem(work.config.FETCH, "min_age_seconds", 0)
-    monkeypatch.setitem(work.config.FETCH, "unixfs_reserve", 0)
+    monkeypatch.setitem(work.config.FETCH, "max_dir_queue", 40)
     work._local.conn = None
     return work.connect()
 
@@ -44,7 +44,7 @@ def test_prune_caps_queue_to_newest(tmp_path, monkeypatch):
     assert cids == {"bafy-b", "bafy-c"}
 
 
-def test_prune_evicts_raw_before_dag_pb(tmp_path, monkeypatch):
+def test_prune_evicts_folders_before_raw(tmp_path, monkeypatch):
     conn = _conn(tmp_path, monkeypatch, max_queue=1, max_age=3600)
     now = time.time()
     conn.execute(
@@ -60,7 +60,7 @@ def test_prune_evicts_raw_before_dag_pb(tmp_path, monkeypatch):
     conn.commit()
     assert work.prune(conn) == 1
     cids = {r[0] for r in conn.execute("SELECT cid FROM cids")}
-    assert cids == {"bafy-pb"}
+    assert cids == {"bafy-raw"}
 
 
 def test_take_batch_includes_sniffed_dag_pb(tmp_path, monkeypatch):
@@ -223,17 +223,22 @@ def test_prune_keeps_named(tmp_path, monkeypatch):
     assert "bafy-old" not in cids
 
 
-def test_prune_reserves_slots_from_raw(tmp_path, monkeypatch):
-    conn = _conn(tmp_path, monkeypatch, max_queue=10, max_age=3600)
-    monkeypatch.setitem(work.config.FETCH, "unixfs_reserve", 80)
+def test_prune_caps_sniffed_folders(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_queue=80, max_age=3600)
+    monkeypatch.setitem(work.config.FETCH, "max_dir_queue", 3)
     now = time.time()
-    for i in range(10):
-        _insert(conn, "bafy-raw-%d" % i, now - 10 + i)
+    for i in range(6):
+        conn.execute(
+            "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+            "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+            ("bafy-pb-%d" % i, "dag-pb", now - 10 + i, now - 10 + i),
+        )
+    conn.commit()
     work.prune(conn)
     left = {r[0] for r in conn.execute("SELECT cid FROM cids")}
-    assert "bafy-raw-9" in left
-    assert "bafy-raw-0" not in left
-    assert len(left) == 8
+    assert "bafy-pb-5" in left
+    assert "bafy-pb-0" not in left
+    assert len(left) == 3
 
 
 def test_take_batch_caps_sniffed_dir_probes(tmp_path, monkeypatch):

@@ -54,7 +54,7 @@ flowchart LR
 
 | process | bind | role |
 | --- | --- | --- |
-| sniffer | `0.0.0.0:4712` | Passive Bitswap WANT listener. Never requests or serves content. |
+| sniffer | `0.0.0.0:4712` | Passive Bitswap WANT listener. Never requests or serves content. Conn-mgr 200/400. |
 | observer | `0.0.0.0:8002` | Work queue, fetch, classify, FTS search, admin. Only SQLite writer. |
 | clubd | `127.0.0.1:8003`, `0.0.0.0:4713` | Sign, verify, inbox, gossip, snapshot stream. |
 
@@ -139,12 +139,13 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
   directory is dropped after the first block and is **not** gossiped.
   PDF children named in that block are queued (`source=named`, at
   most `max_dir_docs` per folder, `max_named` live). HAMT-sharded
-  folders peek `max_hamt_blocks` child blocks for `*.pdf` names only.
-  HTML in a folder is left to ordinary Bitswap sniff. No full tree walk.
+  folders peek up to `max_hamt_blocks` (24) shard blocks, spread
+  across the fanout and a few levels, for `*.pdf` names only. The
+  folder is not cataloged. HTML in a folder is left to ordinary
+  Bitswap sniff. No full tree walk.
 - drops CIDs this node already marked locally unprocessable
-- at cap, **skips new raw** WANTs and **evicts raw** to admit `dag-pb`
-  (Bitswap is mostly raw leaves; FIFO would starve PDF roots). New
-  `dag-pb` still waits when the live queue is already UnixFS
+- at cap, **skips new folders** (`max_dir_queue` = 40) and **evicts
+  folders** to admit raw HTML. Named PDFs still evict raw if needed.
 - counts distinct peers per CID; prefers `prefer_min_peer_count` (2),
   falls back to `min_peer_count` (1)
 
@@ -154,8 +155,8 @@ a `wrong` report) or `source=named` (PDF from a dropped folder)
 survives prune/age.
 
 Prune drops sniffed rows older than `max_age_seconds` (900). Cap is
-400 live `discovered`/`processing` rows. `unixfs_reserve` (80) keeps
-that many slots free of sniffed raw. Folders are forgotten after fetch
+400 live `discovered`/`processing` rows. At most `max_dir_queue` (40)
+sniffed folders sit on that queue. Folders are forgotten after fetch
 via `drop_directory`. Gateway fetches give up after 6s.
 
 ## Skip-hook

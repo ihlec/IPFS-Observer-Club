@@ -23,7 +23,11 @@ def _raise_fd_limit():
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     except (ValueError, OSError):
         return
-    target = max(8192, int(config.FETCH.get("concurrency", 8)) * 16)
+    target = max(
+        8192,
+        int(config.FETCH.get("concurrency", 8)) * 16,
+        int(config.SNIFFER.get("high_connections", 400)) * 4 + 256,
+    )
     if soft >= target:
         return
     for candidate in (target, 16384, 10240, 8192, 4096, 2048):
