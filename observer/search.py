@@ -105,7 +105,7 @@ def abusive_reports():
             seen[cid] = item
             out.append(item)
         item["reporters"].append({
-            "publisher": r["publisher"],
+            "observer": r["publisher"],
             "alias": r["alias"] or "",
             "received_at": r["received_at"],
             "blacklisted": store.is_blacklisted(r["publisher"]),
@@ -135,8 +135,8 @@ def stats():
         "claims": conn.execute(
             "SELECT COUNT(*) FROM claims WHERE until > ?", (time.time(),)
         ).fetchone()[0],
-        "publishers": conn.execute(
-            "SELECT COUNT(DISTINCT publisher) FROM docs"
+        "observers": conn.execute(
+            "SELECT COUNT(DISTINCT publisher) FROM classifies"
         ).fetchone()[0],
     }
     last = conn.execute("SELECT MAX(indexed_at) FROM docs").fetchone()[0]
@@ -149,7 +149,7 @@ def stats():
     return out
 
 
-def publishers(limit=50):
+def observers(limit=50):
     """Nodes ranked by distinct CIDs they classified."""
     conn = store.connect()
     rows = conn.execute(
@@ -171,5 +171,5 @@ def publishers(limit=50):
         alias = r[2] or ""
         if me and r[0] == me and local:
             alias = local
-        out.append({"publisher": r[0], "alias": alias, "n_classify": r[1]})
+        out.append({"observer": r[0], "alias": alias, "n_classify": r[1]})
     return out

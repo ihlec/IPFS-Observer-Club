@@ -34,6 +34,44 @@ def peer_id():
         return None
 
 
+def identity():
+    """clubd /id JSON, or {} if clubd is down."""
+    global _peer_id_cache
+    try:
+        r = _session.get(api_base() + "/id", timeout=2)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("peer_id"):
+            _peer_id_cache = data["peer_id"]
+        return data
+    except (requests.RequestException, ValueError):
+        return {}
+
+
+def connected_peers():
+    try:
+        r = _session.get(api_base() + "/v1/peers", timeout=2)
+        r.raise_for_status()
+        return list(r.json().get("peers") or [])
+    except (requests.RequestException, ValueError, AttributeError):
+        return []
+
+
+def set_bootstrap(peers):
+    """Replace clubd's invite list and dial. None if clubd is down."""
+    try:
+        r = _session.post(
+            api_base() + "/v1/bootstrap",
+            json={"peers": list(peers or [])},
+            timeout=20,
+        )
+        r.raise_for_status()
+        return r.json()
+    except (requests.RequestException, ValueError) as e:
+        log.warning("bootstrap apply failed: %s", e)
+        return None
+
+
 def available():
     try:
         _session.get(api_base() + "/health", timeout=1).raise_for_status()

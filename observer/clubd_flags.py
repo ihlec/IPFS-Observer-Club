@@ -5,11 +5,7 @@ from . import config
 
 
 def flags():
-    peers = config.CLUB.get("bootstrap_peers") or []
-    if isinstance(peers, str):
-        peers = [p.strip() for p in peers.split(",") if p.strip()]
-    else:
-        peers = [str(p).strip() for p in peers if str(p).strip()]
+    peers = config.normalize_bootstrap_peers(config.CLUB.get("bootstrap_peers") or [])
     out = [
         "-club", config.CLUB_ID,
         "-port", str(int(config.CLUB.get("listen_port", 4713))),

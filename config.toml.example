@@ -9,6 +9,7 @@ listen_port = 4713
 api_host = "127.0.0.1"
 api_port = 8003
 # Optional multiaddrs of other Observers, e.g. /ip4/203.0.113.8/tcp/4713/p2p/<peer-id>
+# Also editable under /admin → Peers (dials without restart).
 bootstrap_peers = []
 identity_path = "data/identity.key"
 # Catalog and inbox default to data/<id>/. Set only to override.

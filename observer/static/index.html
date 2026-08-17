@@ -97,21 +97,21 @@ async function loadStats() {
     document.getElementById('statCards').innerHTML =
       statCard((s.classifies||0).toLocaleString(), 'classified') +
       statCard((w.backlog||0).toLocaleString(), 'queue') +
-      statCard((s.publishers||0).toLocaleString(), 'publishers') +
+      statCard((s.observers||0).toLocaleString(), 'observers') +
       statCard(s.llm ? 'up' : 'down', 'llm') +
       statCard(s.clubd ? 'up' : 'down', 'clubd');
   } catch (e) {}
 }
 async function loadRanking() {
   try {
-    const d = await fetch('/api/publishers').then(r => r.json());
-    const rows = d.publishers || [];
+    const d = await fetch('/api/observers').then(r => r.json());
+    const rows = d.observers || [];
     document.getElementById('rank').innerHTML = rows.length
       ? rows.map((p, i) => `
       <tr>
         <td class="rank">${i + 1}</td>
         <td>${esc(p.alias || '—')}</td>
-        <td class="node-id">${esc(p.publisher || '')}</td>
+        <td class="node-id">${esc(p.observer || '')}</td>
         <td class="num">${(p.n_classify || 0).toLocaleString()}</td>
       </tr>`).join('')
       : '<tr><td colspan="4" class="empty">no classifies yet</td></tr>';

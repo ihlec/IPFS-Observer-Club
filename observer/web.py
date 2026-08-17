@@ -1,6 +1,6 @@
 """Web UI: python -m observer.web  ->  http://127.0.0.1:8002"""
 import os
-from typing import Optional
+from typing import List, Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import alias, auth, classify, club, clubd_client, config, llm, search, store, work
+from . import alias, auth, bootstrap, classify, club, clubd_client, config, llm, search, store, work
 
 app = FastAPI(title="IPFS Observer Club", version="0.1.0")
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -53,7 +53,11 @@ class ReportDecideBody(BaseModel):
 
 
 class BlacklistBody(BaseModel):
-    publisher: str = ""
+    observer: str = ""
+
+
+class BootstrapBody(BaseModel):
+    peers: List[str] = []
 
 
 @app.get("/")
@@ -238,6 +242,21 @@ def api_clubs_set(body: ClubBody, request: Request):
     return _club_choice()
 
 
+@app.get("/api/bootstrap")
+def api_bootstrap_get(request: Request):
+    auth.require_admin_read(request)
+    return bootstrap.status()
+
+
+@app.post("/api/bootstrap")
+def api_bootstrap_set(body: BootstrapBody, request: Request):
+    auth.require_admin(request)
+    try:
+        return bootstrap.save(body.peers)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @app.get("/api/stats")
 def api_stats():
     out = search.stats()
@@ -253,9 +272,9 @@ def api_stats():
     return out
 
 
-@app.get("/api/publishers")
-def api_publishers():
-    return {"publishers": search.publishers()}
+@app.get("/api/observers")
+def api_observers():
+    return {"observers": search.observers()}
 
 
 @app.post("/api/report")
@@ -309,28 +328,33 @@ def api_report_decide(body: ReportDecideBody, request: Request):
 @app.get("/api/blacklist")
 def api_blacklist_get(request: Request):
     auth.require_admin_read(request)
-    return {"publishers": store.list_blacklisted()}
+    rows = []
+    for row in store.list_blacklisted():
+        item = dict(row)
+        item["observer"] = item.pop("publisher", "") or ""
+        rows.append(item)
+    return {"observers": rows}
 
 
 @app.post("/api/blacklist")
 def api_blacklist_add(body: BlacklistBody, request: Request):
     auth.require_admin(request)
-    publisher = (body.publisher or "").strip()
-    if not publisher:
-        raise HTTPException(400, "publisher required")
-    if not store.blacklist(publisher):
+    observer = (body.observer or "").strip()
+    if not observer:
+        raise HTTPException(400, "observer required")
+    if not store.blacklist(observer):
         raise HTTPException(400, "cannot blacklist this node")
-    return {"ok": True, "publisher": publisher}
+    return {"ok": True, "observer": observer}
 
 
 @app.post("/api/blacklist/clear")
 def api_blacklist_clear(body: BlacklistBody, request: Request):
     auth.require_admin(request)
-    publisher = (body.publisher or "").strip()
-    if not publisher:
-        raise HTTPException(400, "publisher required")
-    store.unblacklist(publisher)
-    return {"ok": True, "publisher": publisher}
+    observer = (body.observer or "").strip()
+    if not observer:
+        raise HTTPException(400, "observer required")
+    store.unblacklist(observer)
+    return {"ok": True, "observer": observer}
 
 
 @app.get("/api/alias")

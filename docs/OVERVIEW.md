@@ -66,8 +66,9 @@ Browsers never talk to 8003.
 propose reports. `GET /api/snapshot` is localhost-only; clubd pulls it
 for late joiners.
 
-Join: put a peer’s multiaddr from `http://127.0.0.1:8003/id` in
-`club.bootstrap_peers` (same club). On a LAN, mDNS service
+Join: Admin → Peers (same club), or put a peer’s multiaddr from
+`http://127.0.0.1:8003/id` in `club.bootstrap_peers`. Saving in admin
+dials without restart. On a LAN, mDNS service
 `ipfs-observer-club-{club}` finds others.
 
 ## On disk

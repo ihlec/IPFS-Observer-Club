@@ -52,7 +52,7 @@ make start     # clubd + observer (sniffer, indexer, web)
 ```
 
 - Search: http://127.0.0.1:8002
-- Admin (alias, club, classifier, reports, optional password): http://127.0.0.1:8002/admin
+- Admin (alias, club, peers, classifier, reports, optional password): http://127.0.0.1:8002/admin
 - clubd identity: http://127.0.0.1:8003/id
 
 `config.toml`, `data/`, and `.secret` stay on the machine. They are not
@@ -63,10 +63,10 @@ it and set the password again.
 Optional: `[fetch] ipfs_api = "http://127.0.0.1:5001"` to try a local
 Kubo node before public gateways.
 
-Join a friend by adding their multiaddr from `/id` to
-`club.bootstrap_peers`, then `make stop && make start`. On the same LAN,
-mDNS finds other Observers. A late joiner pulls a signed snapshot
-(classifies, aliases, reports, and persistent skips).
+Join a friend from `/admin` → Peers: copy this node’s multiaddr, paste
+theirs, and Save. That writes `club.bootstrap_peers` and dials clubd
+now. On the same LAN, mDNS finds other Observers. A late joiner pulls a
+signed snapshot (classifies, aliases, reports, and persistent skips).
 
 ```bash
 make test

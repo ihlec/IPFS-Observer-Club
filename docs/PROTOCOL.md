@@ -173,7 +173,8 @@ The requester verifies each line the same way as gossip. Snapshot transfer
 is not rate-limited per message (it is cooldown-limited per peer).
 
 Optional LAN join: clubd mDNS service name `ipfs-observer-club-{club}`.
-Invited join is still `club.bootstrap_peers` (those peers must be in the
-same club).
+Invited join is `club.bootstrap_peers` (those peers must be in the same
+club). Admin → Peers writes that list and `POST`s clubd `/v1/bootstrap`
+so the running daemon dials without restart.
 
 Query/result gossip is **not** in v1.

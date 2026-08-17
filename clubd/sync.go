@@ -100,7 +100,7 @@ func (d *daemon) syncLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			connectBootstrap(ctx, d.host, d.bootstrap)
+			connectBootstrap(ctx, d.host, d.bootstrapPeers())
 			for _, pid := range d.host.Network().Peers() {
 				go d.requestSnapshot(ctx, pid)
 			}

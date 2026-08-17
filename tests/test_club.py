@@ -69,6 +69,34 @@ def test_write_club_id_keeps_comments(tmp_path):
     assert config.read_club_id(path=str(path)) == "widgets"
 
 
+def test_write_bootstrap_peers_keeps_comments(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "# header\n"
+        "[club]\n"
+        'id = "academic"\n'
+        "# Optional multiaddrs\n"
+        "bootstrap_peers = []\n"
+        "listen_port = 4713\n"
+        "\n"
+        "[web]\n"
+        "port = 8002\n",
+        encoding="utf-8",
+    )
+    addr = (
+        "/ip4/203.0.113.8/tcp/4713/p2p/"
+        "12D3KooWMRcoucT8Mp2nSYC89y9hKkBWpVXRkUu6oyDhdUowEZnQ"
+    )
+    assert config.write_bootstrap_peers([addr], path=str(path)) == [addr]
+    text = path.read_text(encoding="utf-8")
+    assert "# Optional multiaddrs" in text
+    assert addr in text
+    assert "listen_port = 4713" in text
+    assert config.read_bootstrap_peers(path=str(path)) == [addr]
+    assert config.write_bootstrap_peers([], path=str(path)) == []
+    assert "bootstrap_peers = []" in path.read_text(encoding="utf-8")
+
+
 def test_unknown_club():
     with pytest.raises(ValueError, match="unknown club"):
         club.load("does-not-exist", clubs_root=FIXTURES)

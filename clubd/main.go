@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -55,7 +56,7 @@ type daemon struct {
 	snapshotURL   string
 	snapshotEvery time.Duration
 	snapshotProto protocol.ID
-	bootstrap     string
+	bootstrap     []string
 	clubID        string
 }
 
@@ -127,7 +128,7 @@ func main() {
 		snapshotURL:   *snapshotURL,
 		snapshotEvery: 2 * time.Minute,
 		snapshotProto: snapshotProtoFor(*clubID),
-		bootstrap:     *bootstrap,
+		bootstrap:     splitBootstrap(*bootstrap),
 		clubID:        *clubID,
 	}
 	if err := os.MkdirAll(*inbox, 0o755); err != nil {
@@ -147,7 +148,7 @@ func main() {
 	}
 
 	log.Printf("club %s topics %s{claim,skip,classify,alias,report}", *clubID, topicPrefix)
-	connectBootstrap(ctx, h, *bootstrap)
+	connectBootstrap(ctx, h, d.bootstrapPeers())
 	if *enableMDNS {
 		svc := mdns.NewMdnsService(h, mdnsName, &mdnsNotifee{h: h})
 		if err := svc.Start(); err != nil {
@@ -167,6 +168,7 @@ func main() {
 	mux.HandleFunc("/id", d.handleID)
 	mux.HandleFunc("/v1/publish", d.handlePublish)
 	mux.HandleFunc("/v1/peers", d.handlePeers)
+	mux.HandleFunc("/v1/bootstrap", d.handleBootstrap)
 
 	srv := &http.Server{Addr: *api, Handler: mux}
 	go func() {
@@ -198,6 +200,56 @@ func (d *daemon) handlePeers(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, p.String())
 	}
 	writeJSON(w, map[string]interface{}{"peers": ids})
+}
+
+type bootstrapBody struct {
+	Peers []string `json:"peers"`
+}
+
+type bootstrapDial struct {
+	Addr  string `json:"addr"`
+	Peer  string `json:"peer,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+func (d *daemon) handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		writeJSON(w, map[string]interface{}{"peers": d.bootstrapPeers()})
+	case http.MethodPost:
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		var body bootstrapBody
+		if len(bytes.TrimSpace(raw)) > 0 {
+			if err := json.Unmarshal(raw, &body); err != nil {
+				http.Error(w, "invalid json", 400)
+				return
+			}
+		}
+		peers, err := normalizeBootstrapPeers(body.Peers)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		d.setBootstrapPeers(peers)
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		dial := connectBootstrap(ctx, d.host, peers)
+		connected := make([]string, 0)
+		for _, p := range d.host.Network().Peers() {
+			connected = append(connected, p.String())
+		}
+		writeJSON(w, map[string]interface{}{
+			"peers":     peers,
+			"connected": connected,
+			"dial":      dial,
+		})
+	default:
+		http.Error(w, "GET or POST", 405)
+	}
 }
 
 func (d *daemon) handlePublish(w http.ResponseWriter, r *http.Request) {
@@ -440,31 +492,96 @@ func loadOrCreateKey(path string) (crypto.PrivKey, error) {
 	return priv, nil
 }
 
-func connectBootstrap(ctx context.Context, h host.Host, list string) {
-	if strings.TrimSpace(list) == "" {
-		return
+func (d *daemon) bootstrapPeers() []string {
+	d.syncMu.Lock()
+	defer d.syncMu.Unlock()
+	out := make([]string, len(d.bootstrap))
+	copy(out, d.bootstrap)
+	return out
+}
+
+func (d *daemon) setBootstrapPeers(peers []string) {
+	d.syncMu.Lock()
+	defer d.syncMu.Unlock()
+	d.bootstrap = append([]string(nil), peers...)
+}
+
+func splitBootstrap(list string) []string {
+	parts := strings.Split(list, ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, raw := range parts {
+		raw = strings.TrimSpace(raw)
+		if raw == "" || seen[raw] {
+			continue
+		}
+		seen[raw] = true
+		out = append(out, raw)
 	}
-	for _, raw := range strings.Split(list, ",") {
+	return out
+}
+
+func parseBootstrapAddr(raw string) (peer.AddrInfo, error) {
+	ma, err := multiaddr.NewMultiaddr(raw)
+	if err != nil {
+		return peer.AddrInfo{}, err
+	}
+	ai, err := peer.AddrInfoFromP2pAddr(ma)
+	if err != nil {
+		return peer.AddrInfo{}, err
+	}
+	return *ai, nil
+}
+
+func normalizeBootstrapPeers(in []string) ([]string, error) {
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, raw := range in {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
-		ma, err := multiaddr.NewMultiaddr(raw)
+		if _, err := parseBootstrapAddr(raw); err != nil {
+			return nil, fmt.Errorf("%s: %w", raw, err)
+		}
+		if seen[raw] {
+			continue
+		}
+		seen[raw] = true
+		out = append(out, raw)
+	}
+	if len(out) > 32 {
+		return nil, fmt.Errorf("at most 32 bootstrap peers")
+	}
+	return out, nil
+}
+
+func connectBootstrap(ctx context.Context, h host.Host, peers []string) []bootstrapDial {
+	out := make([]bootstrapDial, 0, len(peers))
+	for _, raw := range peers {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		res := bootstrapDial{Addr: raw}
+		ai, err := parseBootstrapAddr(raw)
 		if err != nil {
+			res.Error = err.Error()
 			log.Printf("bootstrap addr %s: %v", raw, err)
+			out = append(out, res)
 			continue
 		}
-		ai, err := peer.AddrInfoFromP2pAddr(ma)
-		if err != nil {
-			log.Printf("bootstrap peer %s: %v", raw, err)
-			continue
-		}
-		if err := h.Connect(ctx, *ai); err != nil {
+		res.Peer = ai.ID.String()
+		if err := h.Connect(ctx, ai); err != nil {
+			res.Error = err.Error()
 			log.Printf("bootstrap connect %s: %v", ai.ID, err)
+			out = append(out, res)
 			continue
 		}
 		log.Printf("connected to %s", ai.ID)
+		out = append(out, res)
 	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

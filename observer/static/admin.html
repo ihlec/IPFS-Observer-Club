@@ -64,6 +64,25 @@
   </div>
 
   <div class="section">
+    <h3>Peers</h3>
+    <p class="hint">Invite another Observer with a multiaddr from its Admin → Peers (same club). Saving writes <code>club.bootstrap_peers</code> and dials now. On a LAN, mDNS still finds others. Prefer a LAN or public IP, not 127.0.0.1.</p>
+    <p class="hint" id="peerMesh">clubd: — · connected: none</p>
+    <p class="field-label">This node</p>
+    <div id="shareAddrs"><div class="empty" style="padding:12px 0">clubd is down</div></div>
+    <p class="field-label">Connected</p>
+    <div id="connectedPeers"><div class="empty" style="padding:12px 0">none</div></div>
+    <p class="field-label">Bootstrap peers</p>
+    <div id="bootstrapList"><div class="empty" style="padding:12px 0">none</div></div>
+    <div class="row" style="margin-top:12px">
+      <div class="input-wrap" style="flex:1;min-width:0">
+        <input type="text" id="bootstrapAddr" placeholder="/ip4/…/tcp/4713/p2p/…" autocomplete="off" onkeydown="if(event.key==='Enter')addBootstrap()">
+      </div>
+      <button type="button" class="btn btn-search" id="addBootstrap" onclick="addBootstrap()">Add</button>
+    </div>
+    <div class="status" id="bootstrapStatus"></div>
+  </div>
+
+  <div class="section">
     <h3>Classifier</h3>
     <p class="hint">Save and use adds a backend. Stop using removes only the selected one. Groq and Academic Cloud can run at the same time. Each has its own rate limit.</p>
     <p class="hint" id="llmNow">Using: Local</p>
@@ -113,7 +132,7 @@
 
   <div class="section">
     <h3>Blacklisted nodes</h3>
-    <p class="hint">This node ignores classify, skip, claim, alias, and report from these publishers.</p>
+    <p class="hint">This node ignores classify, skip, claim, alias, and report from these observers.</p>
     <div id="blacklistList"><div class="empty">none</div></div>
     <div class="status" id="blacklistStatus"></div>
   </div>
@@ -192,6 +211,7 @@ async function login() {
     loadAlias();
     loadLlm();
     loadAbusive();
+    loadBootstrap();
   } catch (e) {
     status.className = 'status err';
     status.textContent = 'login failed';
@@ -379,6 +399,147 @@ async function saveClub() {
     loadClub();
   }
 }
+let bootstrapState = {bootstrap: [], connected: [], share: [], addrs: []};
+function copyAddr(addr, btn) {
+  const done = () => {
+    const prev = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = prev; }, 1200);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(addr).then(done).catch(() => {});
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = addr;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) {}
+  document.body.removeChild(ta);
+}
+function renderAddrList(el, addrs, emptyText, action) {
+  if (!addrs.length) {
+    el.innerHTML = `<div class="empty" style="padding:12px 0">${esc(emptyText)}</div>`;
+    return;
+  }
+  el.innerHTML = addrs.map(a => `
+    <div class="result-item" data-addr="${esc(a)}">
+      <div class="result-main"><div class="result-cid">${esc(a)}</div></div>
+      <div class="result-actions">
+        <button type="button" class="btn" data-addr-action="${esc(action)}">${action === 'remove' ? 'Remove' : 'Copy'}</button>
+      </div>
+    </div>`).join('');
+}
+function showBootstrap(d) {
+  bootstrapState = d;
+  const n = (d.connected || []).length;
+  const clubd = d.clubd ? 'up' : 'down';
+  document.getElementById('peerMesh').textContent =
+    `clubd: ${clubd} · connected: ${n || 'none'}` +
+    (d.peer_id ? ` · ${d.peer_id}` : '');
+  const share = d.share && d.share.length ? d.share : (d.addrs || []);
+  renderAddrList(
+    document.getElementById('shareAddrs'),
+    share,
+    d.clubd ? 'no listen addresses' : 'clubd is down',
+    'copy',
+  );
+  const connected = document.getElementById('connectedPeers');
+  if (!(d.connected || []).length) {
+    connected.innerHTML = '<div class="empty" style="padding:12px 0">none</div>';
+  } else {
+    connected.innerHTML = (d.connected || []).map(p =>
+      `<div class="result-item"><div class="result-main"><div class="result-cid">${esc(p)}</div></div></div>`
+    ).join('');
+  }
+  renderAddrList(
+    document.getElementById('bootstrapList'),
+    d.bootstrap || [],
+    'none',
+    'remove',
+  );
+}
+async function loadBootstrap() {
+  try {
+    const {res, d} = await api('/api/bootstrap');
+    if (res.ok) showBootstrap(d);
+  } catch (e) {}
+}
+async function saveBootstrap(peers, statusText) {
+  const status = document.getElementById('bootstrapStatus');
+  const btn = document.getElementById('addBootstrap');
+  status.className = 'status';
+  status.textContent = statusText || 'Saving…';
+  btn.disabled = true;
+  try {
+    const {res, d} = await api('/api/bootstrap', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({peers}),
+    });
+    if (!res.ok) {
+      status.className = 'status err';
+      status.textContent = d.detail || d.error || 'save failed';
+      return false;
+    }
+    showBootstrap(d);
+    const failed = (d.dial || []).filter(x => x.error);
+    if (!d.applied) {
+      status.className = 'status ok';
+      status.textContent = 'saved · clubd did not dial';
+    } else if (failed.length) {
+      status.className = 'status err';
+      status.textContent = 'saved · dial failed: ' + (failed[0].error || 'unreachable');
+    } else {
+      status.className = 'status ok';
+      status.textContent = peers.length ? 'saved and dialed' : 'cleared';
+    }
+    return true;
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = 'save failed';
+    return false;
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function addBootstrap() {
+  const input = document.getElementById('bootstrapAddr');
+  const addr = (input.value || '').trim();
+  const status = document.getElementById('bootstrapStatus');
+  if (!addr) {
+    status.className = 'status err';
+    status.textContent = 'paste a multiaddr from the other node';
+    return;
+  }
+  const peers = (bootstrapState.bootstrap || []).slice();
+  if (peers.includes(addr)) {
+    status.className = 'status ok';
+    status.textContent = 'already listed';
+    return;
+  }
+  if (await saveBootstrap(peers.concat([addr]), 'Adding…')) {
+    input.value = '';
+  }
+}
+async function removeBootstrap(addr) {
+  const peers = (bootstrapState.bootstrap || []).filter(p => p !== addr);
+  await saveBootstrap(peers, 'Removing…');
+}
+document.getElementById('shareAddrs').addEventListener('click', ev => {
+  const btn = ev.target.closest('[data-addr-action="copy"]');
+  const item = ev.target.closest('[data-addr]');
+  if (!btn || !item) return;
+  ev.preventDefault();
+  copyAddr(item.getAttribute('data-addr'), btn);
+});
+document.getElementById('bootstrapList').addEventListener('click', ev => {
+  const btn = ev.target.closest('[data-addr-action="remove"]');
+  const item = ev.target.closest('[data-addr]');
+  if (!btn || !item) return;
+  ev.preventDefault();
+  removeBootstrap(item.getAttribute('data-addr'));
+});
 let llmState = {active: 'lmstudio', providers: []};
 let llmSelected = 'lmstudio';
 const LLM_DEFAULTS = {
@@ -484,8 +645,8 @@ function renderAbusive(results) {
       const block = p.blacklisted
         ? '<span class="report-status">blacklisted</span>'
         : '<button type="button" class="btn" data-blacklist>Blacklist</button>';
-      return `<div class="reporter-row" data-publisher="${esc(p.publisher)}">
-        <div class="result-cid">Reported by ${name}${esc(p.publisher)}</div>
+      return `<div class="reporter-row" data-observer="${esc(p.observer)}">
+        <div class="result-cid">Reported by ${name}${esc(p.observer)}</div>
         ${block}
       </div>`;
     }).join('');
@@ -510,9 +671,9 @@ function renderBlacklist(rows) {
   const el = document.getElementById('blacklistList');
   if (!rows.length) { el.innerHTML = '<div class="empty">none</div>'; return; }
   el.innerHTML = rows.map(p => `
-    <div class="result-item" data-publisher="${esc(p.publisher)}">
+    <div class="result-item" data-observer="${esc(p.observer)}">
       <div class="result-main">
-        <div class="result-cid">${p.alias ? esc(p.alias) + ' · ' : ''}${esc(p.publisher)}</div>
+        <div class="result-cid">${p.alias ? esc(p.alias) + ' · ' : ''}${esc(p.observer)}</div>
       </div>
       <div class="result-actions">
         <button type="button" class="btn" data-unblacklist>Unblock</button>
@@ -529,7 +690,7 @@ async function loadAbusive() {
   } catch (e) {}
   try {
     const {res, d} = await api('/api/blacklist');
-    if (res.ok) renderBlacklist(d.publishers || []);
+    if (res.ok) renderBlacklist(d.observers || []);
   } catch (e) {}
 }
 async function changeReport(item, cid, reason) {
@@ -592,8 +753,8 @@ document.getElementById('abusiveList').addEventListener('click', ev => {
   const block = ev.target.closest('[data-blacklist]');
   if (block) {
     ev.preventDefault();
-    const row = block.closest('[data-publisher]');
-    blacklistPublisher(row && row.getAttribute('data-publisher'));
+    const row = block.closest('[data-observer]');
+    blacklistObserver(row && row.getAttribute('data-observer'));
     return;
   }
   const btn = ev.target.closest('[data-reason]');
@@ -603,19 +764,19 @@ document.getElementById('abusiveList').addEventListener('click', ev => {
 });
 document.getElementById('blacklistList').addEventListener('click', ev => {
   const btn = ev.target.closest('[data-unblacklist]');
-  const item = ev.target.closest('[data-publisher]');
+  const item = ev.target.closest('[data-observer]');
   if (!btn || !item) return;
   ev.preventDefault();
-  unblacklistPublisher(item.getAttribute('data-publisher'));
+  unblacklistObserver(item.getAttribute('data-observer'));
 });
-async function blacklistPublisher(publisher) {
+async function blacklistObserver(observer) {
   const status = document.getElementById('abusiveStatus');
-  if (!publisher) return;
+  if (!observer) return;
   try {
     const {res, d} = await api('/api/blacklist', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({publisher}),
+      body: JSON.stringify({observer}),
     });
     if (!res.ok) {
       status.textContent = d.detail || 'blacklist failed';
@@ -627,14 +788,14 @@ async function blacklistPublisher(publisher) {
     status.textContent = 'blacklist failed';
   }
 }
-async function unblacklistPublisher(publisher) {
+async function unblacklistObserver(observer) {
   const status = document.getElementById('blacklistStatus');
-  if (!publisher) return;
+  if (!observer) return;
   try {
     const {res, d} = await api('/api/blacklist/clear', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({publisher}),
+      body: JSON.stringify({observer}),
     });
     if (!res.ok) {
       status.textContent = d.detail || 'unblock failed';
@@ -744,9 +905,10 @@ async function saveLlm() {
     loadAlias();
     loadLlm();
     loadAbusive();
+    loadBootstrap();
   }
   setInterval(loadStats, 5000);
-  setInterval(() => { if (canAdmin()) loadAbusive(); }, 15000);
+  setInterval(() => { if (canAdmin()) { loadAbusive(); loadBootstrap(); } }, 15000);
 })();
 </script>
 </body>

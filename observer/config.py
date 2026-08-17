@@ -117,6 +117,123 @@ def write_club_id(club_id, path=None):
     return club_id
 
 
+_BOOTSTRAP_ASSIGN = re.compile(
+    r"(?ms)^(\s*bootstrap_peers\s*=\s*)(?:\[[^\]]*\]|\"[^\"]*\"|'[^']*')"
+)
+_BOOTSTRAP_SCHEME = re.compile(
+    r"^/(?:ip4|ip6|dns|dns4|dns6|dnsaddr)/"
+)
+_MAX_BOOTSTRAP = 32
+
+
+def parse_bootstrap_addr(value):
+    """Require a libp2p multiaddr with a peer ID (the invite form from /id)."""
+    addr = str(value or "").strip()
+    if not addr or any(c.isspace() for c in addr):
+        raise ValueError("bootstrap multiaddr required")
+    if len(addr) > 512:
+        raise ValueError("bootstrap multiaddr is too long")
+    if not _BOOTSTRAP_SCHEME.match(addr):
+        raise ValueError(
+            "bootstrap multiaddr must start with /ip4/, /ip6/, /dns4/, or /dnsaddr/"
+        )
+    if "/p2p/" not in addr and "/ipfs/" not in addr:
+        raise ValueError("bootstrap multiaddr must include /p2p/<peer-id>")
+    return addr
+
+
+def _iter_bootstrap_values(values):
+    if values is None:
+        return
+    if isinstance(values, str):
+        values = values.replace("\n", ",").split(",")
+    for item in values:
+        item = str(item).strip()
+        if item:
+            yield item
+
+
+def normalize_bootstrap_peers(values, strict=False):
+    out = []
+    seen = set()
+    for raw in _iter_bootstrap_values(values):
+        try:
+            addr = parse_bootstrap_addr(raw)
+        except ValueError:
+            if strict:
+                raise
+            continue
+        if addr in seen:
+            continue
+        seen.add(addr)
+        out.append(addr)
+    if len(out) > _MAX_BOOTSTRAP:
+        raise ValueError("at most %s bootstrap peers" % _MAX_BOOTSTRAP)
+    return out
+
+
+def _toml_basic_string(value):
+    return '"%s"' % (
+        value.replace("\\", "\\\\").replace('"', '\\"')
+    )
+
+
+def _format_bootstrap_toml(peers):
+    if not peers:
+        return "[]"
+    lines = "\n".join("    %s," % _toml_basic_string(p) for p in peers)
+    return "[\n%s\n]" % lines
+
+
+def read_bootstrap_peers(path=None):
+    """Bootstrap multiaddrs saved in config.toml."""
+    path = path or config_write_path()
+    if os.path.isfile(path):
+        with open(path, "rb") as f:
+            raw = tomllib.load(f)
+        return normalize_bootstrap_peers(
+            (raw.get("club") or {}).get("bootstrap_peers") or []
+        )
+    return normalize_bootstrap_peers(CLUB.get("bootstrap_peers") or [])
+
+
+def write_bootstrap_peers(peers, path=None):
+    """Set ``[club] bootstrap_peers`` in config.toml, keeping comments."""
+    peers = normalize_bootstrap_peers(peers, strict=True)
+    path = path or config_write_path()
+    if not os.path.isfile(path):
+        raise ValueError("no config.toml to update")
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    formatted = _format_bootstrap_toml(peers)
+    parts = re.split(r"(?=^\[)", text, flags=re.M)
+    found = False
+    out = []
+    for part in parts:
+        if re.match(r"^\[club\]\s*$", part.split("\n", 1)[0].rstrip("\r")):
+            replaced, n = _BOOTSTRAP_ASSIGN.subn(
+                lambda m: m.group(1) + formatted, part, count=1,
+            )
+            if n:
+                part = replaced
+            else:
+                part = re.sub(
+                    r"^(\[club\][ \t]*\n)",
+                    r"\1bootstrap_peers = %s\n" % formatted,
+                    part,
+                    count=1,
+                )
+            found = True
+        out.append(part)
+    if not found:
+        raise ValueError("config.toml has no [club] section")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("".join(out))
+    if os.path.abspath(path) == os.path.abspath(config_write_path()):
+        CLUB["bootstrap_peers"] = list(peers)
+    return peers
+
+
 def _club_path(key, legacy, namespaced):
     raw = CLUB.get(key)
     if not raw or raw == legacy:

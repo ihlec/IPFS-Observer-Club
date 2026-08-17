@@ -57,12 +57,13 @@ def test_ranking_counts_distinct_cids(tmp_path, monkeypatch):
         "kind": "alias", "publisher": "busy", "alias": "lab-one", "v": 1,
     })
     monkeypatch.setattr(search, "store", store)
-    rank = search.publishers()
-    assert [r["publisher"] for r in rank] == ["busy", "quiet"]
+    rank = search.observers()
+    assert [r["observer"] for r in rank] == ["busy", "quiet"]
     assert rank[0]["n_classify"] == 2
     assert rank[0]["alias"] == "lab-one"
     assert rank[1]["n_classify"] == 1
     assert rank[1]["alias"] == ""
+    assert search.stats()["observers"] == 2
 
 
 def test_browse_uses_one_row_per_cid(tmp_path, monkeypatch):
