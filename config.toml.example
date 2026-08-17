@@ -67,7 +67,7 @@ max_age_seconds = 900
 max_queue = 400
 # Keep this many live slots free of sniffed raw so dag-pb / named files can enter.
 unixfs_reserve = 80
-# PDF/HTML children queued from a dropped UnixFS directory (no tree walk).
+# PDF children queued from a dropped UnixFS directory (no tree walk).
 max_dir_docs = 8
 max_named = 80
 # Local unprocessable skips expire so a later sighting can retry.

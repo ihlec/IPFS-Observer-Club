@@ -130,11 +130,11 @@ _FILE_EXT = (
     ".pdf", ".html", ".htm", ".txt", ".md", ".css", ".js", ".mjs", ".cjs",
     ".ts", ".jsx", ".tsx", ".map", ".json", ".wasm", ".less", ".scss",
 )
-_DOC_CHILD_EXT = (".pdf", ".html", ".htm")
+_DOC_CHILD_EXT = (".pdf",)
 
 
 def doc_child_links(links, max_n=8):
-    """PDF/HTML children of a UnixFS directory. No tree walk."""
+    """PDF children of a UnixFS directory. No tree walk. HTML is sniffed as raw."""
     out = []
     for name, cid in links or ():
         if len(out) >= max_n:

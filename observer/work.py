@@ -222,18 +222,19 @@ def drop_directory(conn, cid):
 
 
 def enqueue_doc_children(links, skip_cid=None):
-    """Queue PDF/HTML names from a dropped directory. Folder itself stays out."""
+    """Queue PDF names from a dropped directory. Folder itself stays out."""
     from . import store
     max_n = int(config.FETCH.get("max_dir_docs", 8))
     cap_named = int(config.FETCH.get("max_named", 80))
     picked = unixfs.doc_child_links(links, max_n=max_n)
-    if not picked:
-        return 0
     now = time.time()
     min_age = int(config.FETCH.get("min_age_seconds", 10))
     first = now - min_age - 1
     n = 0
     with locked() as conn:
+        drop_named_non_pdf(conn)
+        if not picked:
+            return 0
         named_n = conn.execute(
             "SELECT COUNT(*) FROM cids WHERE IFNULL(source, 'sniff') = 'named' "
             "AND status IN ('discovered', 'processing')"
@@ -266,6 +267,22 @@ def enqueue_doc_children(links, skip_cid=None):
             named_n += 1
             n += 1
     return n
+
+
+def drop_named_non_pdf(conn=None):
+    """Forget named HTML so Wikipedia dumps cannot fill the PDF cap."""
+    conn = conn or connect()
+    dropped = 0
+    with _db_lock:
+        rows = conn.execute(
+            "SELECT cid FROM cids WHERE IFNULL(source, 'sniff') = 'named' "
+            "AND status = 'discovered' "
+            "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf'"
+        ).fetchall()
+        for row in rows:
+            forget_cid(conn, row[0])
+            dropped += 1
+    return dropped
 
 
 def max_age_seconds():
@@ -301,6 +318,7 @@ def prune(conn=None):
     cap = max_queue()
     dropped = 0
     with _db_lock:
+        dropped += drop_named_non_pdf(conn)
         stale = conn.execute(
             "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
             "AND NOT " + _KEEP_SRC + " "
@@ -427,6 +445,17 @@ _UNIXFS_SQL = (
 )
 
 
+_TAKE_ORDER = (
+    "CASE "
+    "  WHEN IFNULL(source, 'sniff') IN ('report', 'named') "
+    "    OR lower(IFNULL(filename,'')) LIKE '%.pdf' THEN 0 "
+    "  WHEN lower(IFNULL(filename,'')) LIKE '%.html' "
+    "    OR lower(IFNULL(filename,'')) LIKE '%.htm' THEN 1 "
+    "  WHEN codec = 'dag-pb' THEN 2 "
+    "  ELSE 3 END"
+)
+
+
 def _select_discovered(conn, extra_where, min_peers, max_first_seen,
                        min_last_seen, attempt_cap, limit):
     return conn.execute(
@@ -438,7 +467,7 @@ def _select_discovered(conn, extra_where, min_peers, max_first_seen,
         "  AND attempts < ? "
         "  AND IFNULL(codec, '') NOT IN ('libp2p-key', 'json', 'dag-json') "
         "  AND " + extra_where + " "
-        "ORDER BY CASE WHEN codec = 'dag-pb' THEN 0 ELSE 1 END, "
+        "ORDER BY " + _TAKE_ORDER + ", "
         "  peer_count DESC, last_seen DESC LIMIT ?",
         (min_peers, max_first_seen, min_last_seen, attempt_cap, limit),
     ).fetchall()

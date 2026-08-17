@@ -137,8 +137,9 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
   `dag-cbor` (not documents)
 - UnixFS `dag-pb` **is** queued: that is how IPFS stores PDFs. A
   directory is dropped after the first block and is **not** gossiped.
-  PDF/HTML children named in that block are queued (`source=named`, at
-  most `max_dir_docs` per folder, `max_named` live). No tree walk.
+  PDF children named in that block are queued (`source=named`, at
+  most `max_dir_docs` per folder, `max_named` live). HTML in a folder
+  is left to ordinary Bitswap sniff. No tree walk.
 - drops CIDs this node already marked locally unprocessable
 - at cap, **skips new raw** WANTs and **evicts raw** to admit `dag-pb`
   (Bitswap is mostly raw leaves; FIFO would starve PDF roots). New
@@ -146,9 +147,9 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
 - counts distinct peers per CID; prefers `prefer_min_peer_count` (2),
   falls back to `min_peer_count` (1)
 
-Workers take **`dag-pb` before raw**, even when the raw CID has more
-peers. A `source=report` row (second vote or a `wrong` report) or
-`source=named` (PDF/HTML from a dropped folder) survives prune/age.
+Workers take **named PDFs, then HTML, then sniffed `dag-pb`, then raw**.
+A `source=report` row (second vote or a `wrong` report) or
+`source=named` (PDF from a dropped folder) survives prune/age.
 
 Prune drops sniffed rows older than `max_age_seconds` (900). Cap is
 400 live `discovered`/`processing` rows. `unixfs_reserve` (80) keeps
@@ -207,7 +208,7 @@ flowchart TD
   hook -->|foreign claim| wait[return to discovered]
   hook -->|must_classify or empty| fetch[CID-verified sample]
   fetch --> dir{UnixFS directory?}
-  dir -->|yes| named["queue named .pdf/.html children"]
+  dir -->|yes| named["queue named .pdf children"]
   named --> gdir["local drop_directory"]
   dir -->|no| mime{PDF / HTML / prose?}
   mime -->|no| loc["local unprocessable / remember binary"]

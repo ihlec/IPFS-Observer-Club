@@ -52,6 +52,8 @@ start: build
 stop:
 	@if [ -f data/observer.pid ]; then kill $$(cat data/observer.pid) 2>/dev/null || true; rm -f data/observer.pid; fi
 	@if [ -f data/clubd.pid ]; then kill $$(cat data/clubd.pid) 2>/dev/null || true; rm -f data/clubd.pid; fi
+	@pkill -f ' -m observer.main' >/dev/null 2>&1 || true
+	@pkill -f 'build/sniffer -port' >/dev/null 2>&1 || true
 	@for p in 8002 8003 4712 4713; do \
 	  pids=$$(lsof -tiTCP:$$p -sTCP:LISTEN 2>/dev/null || true); \
 	  if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; fi; \

@@ -179,7 +179,7 @@ def process_one(conn, row):
     if result.ok and (
         result.is_directory or result.mime_type == "inode/directory"
     ):
-        # Folders stay local. Named PDF/HTML children are queued; no tree walk.
+        # Folders stay local. Named PDF children are queued; no tree walk.
         n = work.enqueue_doc_children(getattr(result, "links", None), skip_cid=cid)
         work.drop_directory(conn, cid)
         _bump("dir_drops")

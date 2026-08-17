@@ -236,7 +236,27 @@ def test_prune_reserves_slots_from_raw(tmp_path, monkeypatch):
     assert len(left) == 8
 
 
-def test_enqueue_doc_children_pdf_html_only(tmp_path, monkeypatch):
+def test_take_batch_prefers_named_pdf_over_dag_pb(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_age=3600)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,5,5,'discovered',0)",
+        ("bafy-pb", "dag-pb", now - 20, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts, source, filename) "
+        "VALUES (?,?,?,?,1,1,'discovered',0,'named','paper.pdf')",
+        ("bafy-pdf", "raw", now - 20, now - 30),
+    )
+    conn.commit()
+    monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 1)
+    rows = work.take_batch(conn, limit=1)
+    assert [r["cid"] for r in rows] == ["bafy-pdf"]
+
+
+def test_enqueue_doc_children_pdf_only(tmp_path, monkeypatch):
     from observer import store
     from tests.cids import cid_for, cid_pb_for
 
@@ -252,12 +272,37 @@ def test_enqueue_doc_children_pdf_html_only(tmp_path, monkeypatch):
         ("fig.png", png),
         ("readme.txt", cid_for("readme")),
     ])
-    assert n == 2
+    assert n == 1
     rows = {r["cid"]: r for r in conn.execute("SELECT * FROM cids")}
     assert rows[pdf]["source"] == "named"
     assert rows[pdf]["filename"] == "paper.pdf"
-    assert rows[html]["source"] == "named"
+    assert html not in rows
     assert png not in rows
+
+
+def test_prune_drops_named_html(tmp_path, monkeypatch):
+    from tests.cids import cid_for, cid_pb_for
+
+    conn = _conn(tmp_path, monkeypatch, max_age=3600)
+    now = time.time()
+    html = cid_for("wiki")
+    pdf = cid_pb_for("paper")
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts, source, filename) "
+        "VALUES (?,?,?,?,1,1,'discovered',0,'named','Chick_fil_A.html')",
+        (html, "raw", now, now),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts, source, filename) "
+        "VALUES (?,?,?,?,1,1,'discovered',0,'named','paper.pdf')",
+        (pdf, "dag-pb", now, now),
+    )
+    conn.commit()
+    assert work.drop_named_non_pdf(conn) == 1
+    cids = {r[0] for r in conn.execute("SELECT cid FROM cids")}
+    assert cids == {pdf}
 
 
 def test_enqueue_doc_children_caps(tmp_path, monkeypatch):
