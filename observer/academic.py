@@ -112,6 +112,8 @@ def prior(text, mime=None, filename=None):
     Likely and uncertain still go to the LLM for field/topic. Unlikely is
     skipped locally and gossiped as out_of_scope so peers do not fetch it.
     Origin (repository, university, ORCID) counts as much as a paper shape.
+    PDFs are documents: a short extract is common (first page, scan) and
+    does not by itself mean out of scope.
     """
     text = text or ""
     n = score(text, mime=mime, filename=filename)
@@ -119,6 +121,8 @@ def prior(text, mime=None, filename=None):
     pdf = mime == "application/pdf" or (filename or "").lower().endswith(".pdf")
     if n >= 3 or (pdf and n >= 2):
         return LIKELY
+    if pdf:
+        return UNCERTAIN
     if n < 2:
         if len(_NAV.findall(text)) >= 2:
             return UNLIKELY

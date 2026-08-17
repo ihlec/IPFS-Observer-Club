@@ -276,14 +276,22 @@ def prune(conn=None):
 
 
 def expire_local_skips(conn=None):
-    """Requeue local unprocessable skips after TTL. Content may appear later."""
+    """Requeue local skips that should run again."""
     conn = conn or connect()
     ttl = skip_ttl_seconds()
-    if ttl <= 0:
-        return 0
-    cutoff = time.time() - ttl
+    n = 0
     with _db_lock:
-        return conn.execute(
+        n += conn.execute(
+            "UPDATE cids SET status = 'discovered', attempts = 0, error = 'pdf_retry' "
+            "WHERE status = 'skipped' "
+            "AND mime_type = 'application/pdf' "
+            "AND IFNULL(error, '') IN "
+            "('out_of_scope', 'not_academic', 'not_academic_document')"
+        ).rowcount
+        if ttl <= 0:
+            return n
+        cutoff = time.time() - ttl
+        n += conn.execute(
             "UPDATE cids SET status = 'discovered', attempts = 0, error = 'skip_expired' "
             "WHERE status = 'skipped' "
             "AND IFNULL(error, '') IN ('unprocessable', 'llm_disagreed') "
@@ -293,6 +301,7 @@ def expire_local_skips(conn=None):
             "AND IFNULL(last_checked, last_seen) < ?",
             (cutoff,),
         ).rowcount
+    return n
 
 
 def mark(conn, cid, status, **fields):

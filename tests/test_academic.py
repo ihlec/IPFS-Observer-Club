@@ -29,6 +29,12 @@ def test_long_unmarked_text_is_uncertain():
     assert prior(text, mime="text/plain") == UNCERTAIN
 
 
+def test_short_unmarked_pdf_is_uncertain():
+    text = "Page 1. A few extracted words from a scanned article."
+    assert prior(text, mime="application/pdf") == UNCERTAIN
+    assert prior(text, mime="text/html") == UNLIKELY
+
+
 def test_pdf_with_one_marker_is_likely():
     text = "Smith et al. describe a method for genome editing in mice."
     assert prior(text, mime="application/pdf") == LIKELY

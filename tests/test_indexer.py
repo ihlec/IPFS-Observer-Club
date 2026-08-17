@@ -360,6 +360,71 @@ def test_directory_is_forgotten(tmp_path, monkeypatch):
     assert evicted == 1
 
 
+def test_short_pdf_goes_to_llm(tmp_path, monkeypatch):
+    wconn, _club = _dbs(tmp_path, monkeypatch)
+    called = []
+    published = []
+    text = "Page 1. Extracted words from a scanned methods article. " * 4
+    monkeypatch.setattr(
+        indexer.fetch, "fetch_cid",
+        lambda *a, **k: _sample(b"%PDF-1.4 " + text.encode(), "application/pdf"),
+    )
+    monkeypatch.setattr(
+        indexer.extract, "extract_document",
+        lambda *a, **k: (text, "application/pdf", None, None),
+    )
+    monkeypatch.setattr(indexer.classify, "available", lambda: True)
+    monkeypatch.setattr(
+        indexer.classify, "classify",
+        lambda *a, **k: called.append("llm") or {
+            "in_scope": True, "field": "biology", "topic": "methods",
+            "keywords": "scan", "license": None, "model": "x", "provider": "lmstudio",
+        },
+    )
+    monkeypatch.setattr(
+        indexer.clubd_client, "publish_classify",
+        lambda cid, **fields: published.append(cid) or True,
+    )
+    monkeypatch.setattr(indexer, "_try_claim", lambda cid: False)
+    assert indexer.process_one(wconn, _discovered(wconn)) is True
+    assert called == ["llm"]
+    assert published == [CID]
+
+
+def test_pdf_scope_skip_is_fetched_again(tmp_path, monkeypatch):
+    wconn, club = _dbs(tmp_path, monkeypatch)
+    store.ingest_message(club, {
+        "kind": "skip", "cid": CID, "publisher": "peer",
+        "mime_type": "application/pdf", "reason": "out_of_scope", "v": 1,
+    })
+    called = []
+    monkeypatch.setattr(
+        indexer.fetch, "fetch_cid",
+        lambda *a, **k: called.append("fetch") or _sample(b"%PDF-1.4 x", "application/pdf"),
+    )
+    monkeypatch.setattr(
+        indexer.extract, "extract_document",
+        lambda *a, **k: ("Page 1. Extracted words from a scanned article. " * 4,
+                         "application/pdf", None, None),
+    )
+    monkeypatch.setattr(indexer.classify, "available", lambda: True)
+    monkeypatch.setattr(
+        indexer.classify, "classify",
+        lambda *a, **k: called.append("llm") or {
+            "in_scope": True, "field": "biology", "topic": "x",
+            "keywords": "", "license": None, "model": "x", "provider": "lmstudio",
+        },
+    )
+    monkeypatch.setattr(
+        indexer.clubd_client, "publish_classify",
+        lambda cid, **fields: True,
+    )
+    monkeypatch.setattr(indexer, "_try_claim", lambda cid: False)
+    assert indexer.process_one(wconn, _discovered(wconn)) is True
+    assert "fetch" in called
+    assert "llm" in called
+
+
 def test_short_pdf_stays_local(tmp_path, monkeypatch):
     wconn, _club = _dbs(tmp_path, monkeypatch)
     called = []

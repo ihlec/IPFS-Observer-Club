@@ -220,8 +220,10 @@ flowchart TD
 
 **Origin prior** (academic club): cheap markers — DOI, arXiv, ORCID,
 repository, university, course notes, dataset, thesis. Origin counts;
-the page does not have to look like a paper. `likely` / `uncertain` go
-to the model. `unlikely` gossips `out_of_scope`.
+the page does not have to look like a paper. A PDF with a short extract
+still goes to the model (`uncertain`); only HTML/plain with no origin
+markers and little text is `unlikely`. `likely` / `uncertain` go to the
+model. `unlikely` gossips `out_of_scope`.
 
 **LLM `in_scope` false:**
 

@@ -150,10 +150,15 @@ def process_one(conn, row):
         kind = hit.get("kind")
         rerun = store.must_classify(cid)
         if kind == "skip" and not rerun:
-            work.mark(conn, cid, "skipped", mime_type=hit.get("mime_type"),
-                      error=hit.get("reason") or "club_skip",
-                      last_checked=time.time())
-            return True
+            pdf_again = (
+                (hit.get("mime_type") or "") == "application/pdf"
+                and club.is_persist_skip(hit.get("reason") or "")
+            )
+            if not pdf_again:
+                work.mark(conn, cid, "skipped", mime_type=hit.get("mime_type"),
+                          error=hit.get("reason") or "club_skip",
+                          last_checked=time.time())
+                return True
         if kind == "classify" and not rerun:
             work.mark(conn, cid, "indexed", mime_type=hit.get("mime_type"),
                       size=hit.get("size"), filename=hit.get("filename"),
@@ -359,13 +364,13 @@ def worker_loop(stop_event):
             log.info("clubd reachable, publishing")
             _clubd_down_logged = False
         try:
-            rows = work.take_batch(conn, limit=5)
+            rows = work.take_batch(conn, limit=1)
         except sqlite3.OperationalError as e:
             log.warning("work queue busy, backing off: %s", e)
             stop_event.wait(1)
             continue
         if not rows:
-            stop_event.wait(15)
+            stop_event.wait(2)
             continue
         for row in rows:
             if stop_event.is_set():
@@ -378,10 +383,8 @@ def worker_loop(stop_event):
             except Exception:
                 log.exception("processing %s failed", row["cid"])
                 _retry_later(conn, row, error="worker_error")
-        # Mime-skips do not need LM Studio. If a batch needed the model and
-        # it is down, back off so we do not spin on the same PDFs.
         if not classify.available():
-            stop_event.wait(15)
+            stop_event.wait(2)
 
 
 class SnifferManager:

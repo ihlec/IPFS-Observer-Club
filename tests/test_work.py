@@ -168,3 +168,19 @@ def test_expire_local_unprocessable(tmp_path, monkeypatch):
     rows = {r["cid"]: r["status"] for r in conn.execute("SELECT cid, status FROM cids")}
     assert rows["bafy-old"] == "discovered"
     assert rows["bafy-keep"] == "skipped"
+
+
+def test_expire_reques_scope_skipped_pdfs(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, last_checked, "
+        "peer_count, want_count, status, attempts, mime_type, error) "
+        "VALUES ('bafy-pdf','dag-pb',?,?,?,1,1,'skipped',0,'application/pdf','out_of_scope')",
+        (now, now, now),
+    )
+    conn.commit()
+    assert work.expire_local_skips(conn) == 1
+    row = conn.execute("SELECT status, error FROM cids WHERE cid='bafy-pdf'").fetchone()
+    assert row["status"] == "discovered"
+    assert row["error"] == "pdf_retry"

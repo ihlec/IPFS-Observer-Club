@@ -66,9 +66,11 @@ class _Host:
         self.chat_gap = min(max(self.chat_gap, _CHAT_GAP_START) + 4.0, 16.0)
         self.last_429 = now
 
-    def pace(self):
+    def pace(self, remote=True):
         now = time.monotonic()
         gap = float(self.chat_gap or 0)
+        if not remote and gap <= _CHAT_GAP_START:
+            gap = 0.0
         if self.last_chat > 0 and gap > 0:
             wait = gap - (now - self.last_chat)
             if wait > 0:
@@ -366,7 +368,7 @@ def _request(prov, host, text, mime, filename, codec, max_chars):
         payload.update(extra)
         if host.is_paused():
             raise _Paused()
-        host.pace()
+        host.pace(remote=bool(prov.get("needs_key")))
         resp = _session.post(
             prov["base_url"] + "/chat/completions",
             json=payload,
