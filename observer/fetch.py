@@ -200,6 +200,7 @@ def _assemble_file(root_node, gateway_offset=0, child_fetches=None):
     max_children = MAX_CHILD_BLOCKS
     sniffed = False
     truncated = False
+    pending = list(root_node.links)
 
     def _apply_budget_from(buf):
         mime = extract.sniff_mime(bytes(buf[:4096]))
@@ -210,7 +211,7 @@ def _assemble_file(root_node, gateway_offset=0, child_fetches=None):
             total = root_node.filesize
             if total and total <= MAX_PDF_BYTES:
                 extra_budget = MAX_PDF_BYTES
-                extra = len(root_node.links)
+                extra = max(len(root_node.links), len(pending))
         return stop, extra, extra_budget
 
     if len(out) >= _SNIFF_MIN:
@@ -219,13 +220,15 @@ def _assemble_file(root_node, gateway_offset=0, child_fetches=None):
         if stop:
             return bytes(out[:budget]), False
 
-    for _name, child_cid in root_node.links:
+    while pending:
         if max_children <= 0 or len(out) >= budget:
+            truncated = True
             break
         if sniffed:
             mime = extract.sniff_mime(bytes(out[:4096])) if len(out) >= _SNIFF_MIN else None
             if mime and not extract.processable(mime):
                 break
+        _name, child_cid = pending.pop(0)
         block = get_block(child_cid, gateway_offset)
         if child_fetches is not None:
             child_fetches.append(child_cid)
@@ -233,10 +236,25 @@ def _assemble_file(root_node, gateway_offset=0, child_fetches=None):
             truncated = True
             break
         max_children -= 1
+        child = None
         try:
             child = unixfs.parse_dag_pb(block)
-            out += child.inline_data if child.inline_data else block
         except Exception:
+            child = None
+        if child is not None and child.is_directory:
+            continue
+        if (
+            child is not None
+            and child.unixfs_type in ("file", "raw")
+            and (child.inline_data or child.links)
+        ):
+            # Nested UnixFS: file bytes are inline_data / grandchildren,
+            # never the protobuf wrapper (which sniffs as text/plain).
+            if child.inline_data:
+                out += child.inline_data
+            if child.links:
+                pending = list(child.links) + pending
+        else:
             out += block
         if not sniffed and len(out) >= _SNIFF_MIN:
             sniffed = True

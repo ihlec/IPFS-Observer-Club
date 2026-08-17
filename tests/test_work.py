@@ -43,6 +43,25 @@ def test_prune_caps_queue_to_newest(tmp_path, monkeypatch):
     assert cids == {"bafy-b", "bafy-c"}
 
 
+def test_prune_evicts_raw_before_dag_pb(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_queue=1, max_age=3600)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-raw", "raw", now - 5, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-pb", "dag-pb", now - 30, now - 30),
+    )
+    conn.commit()
+    assert work.prune(conn) == 1
+    cids = {r[0] for r in conn.execute("SELECT cid FROM cids")}
+    assert cids == {"bafy-pb"}
+
+
 def test_take_batch_includes_sniffed_dag_pb(tmp_path, monkeypatch):
     conn = _conn(tmp_path, monkeypatch, max_age=3600)
     now = time.time()
@@ -59,7 +78,26 @@ def test_take_batch_includes_sniffed_dag_pb(tmp_path, monkeypatch):
     conn.commit()
     monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 1)
     rows = work.take_batch(conn, limit=5)
-    assert [r["cid"] for r in rows] == ["bafy-raw", "bafy-pb"]
+    assert [r["cid"] for r in rows] == ["bafy-pb", "bafy-raw"]
+
+
+def test_take_batch_prefers_unixfs_over_popular_raw(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_age=3600)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,5,5,'discovered',0)",
+        ("bafy-raw", "raw", now - 20, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-pb", "dag-pb", now - 20, now - 10),
+    )
+    conn.commit()
+    monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 2)
+    rows = work.take_batch(conn, limit=1)
+    assert [r["cid"] for r in rows] == ["bafy-pb"]
 
 
 def test_take_batch_fetches_reported_dag_pb(tmp_path, monkeypatch):

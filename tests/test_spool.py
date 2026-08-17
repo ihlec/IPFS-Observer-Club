@@ -38,7 +38,7 @@ def test_spool_ingest_records(tmp_path, monkeypatch):
     assert os.path.exists(path)  # active file kept
 
 
-def test_spool_holds_new_cids_at_queue_cap(tmp_path, monkeypatch):
+def test_spool_skips_raw_at_cap_to_reach_unixfs(tmp_path, monkeypatch):
     spool_dir = tmp_path / "spool"
     spool_dir.mkdir()
     monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
@@ -48,8 +48,32 @@ def test_spool_holds_new_cids_at_queue_cap(tmp_path, monkeypatch):
     work._local.conn = None
     store._local.conn = None
     now = int(time.time())
-    first = cid_for("held-first")
-    second = cid_for("held-second")
+    raw = cid_for("held-raw")
+    unixfs = cid_pb_for("paper")
+    path = spool_dir / "cids-20260101-000000.jsonl"
+    path.write_text("".join(
+        json.dumps({"ts": now, "cid": cid, "peer": "12D3aaa"}) + "\n"
+        for cid in (raw, unixfs)
+    ))
+    assert spool.run_once() == 2
+    conn = work.connect()
+    rows = {r[0]: r[1] for r in conn.execute("SELECT cid, codec FROM cids")}
+    assert unixfs in rows and rows[unixfs] == "dag-pb"
+    assert raw not in rows
+
+
+def test_spool_holds_unixfs_at_cap_when_queue_is_unixfs(tmp_path, monkeypatch):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
+    monkeypatch.setattr(work.config, "WORK_DB", str(tmp_path / "work.sqlite"))
+    monkeypatch.setattr(store.config, "DB_PATH", str(tmp_path / "club.sqlite"))
+    monkeypatch.setitem(work.config.FETCH, "max_queue", 1)
+    work._local.conn = None
+    store._local.conn = None
+    now = int(time.time())
+    first = cid_pb_for("first-pdf")
+    second = cid_pb_for("second-pdf")
     path = spool_dir / "cids-20260101-000000.jsonl"
     path.write_text("".join(
         json.dumps({"ts": now, "cid": cid, "peer": "12D3aaa"}) + "\n"

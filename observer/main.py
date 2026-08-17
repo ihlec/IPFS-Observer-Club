@@ -70,6 +70,9 @@ def main():
     dropped = work.prune(conn)
     if dropped:
         log.info("dropped %d stale work-queue CIDs", dropped)
+    ingested = spool.run_once()
+    if ingested:
+        log.info("ingested %d spool records at startup", ingested)
     if alias.announce():
         log.info("announced alias %s", alias.current())
 

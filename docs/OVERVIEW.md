@@ -137,13 +137,15 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
 - UnixFS `dag-pb` **is** queued: that is how IPFS stores PDFs. A
   directory is dropped after the first block (`inode/directory` skip)
 - drops CIDs this node already marked locally unprocessable
-- stops advancing the spool offset when the live queue is at cap, so
-  leftover WANTs wait instead of being pruned as overflow
+- at cap, **skips new raw** WANTs and **evicts raw** to admit `dag-pb`
+  (Bitswap is mostly raw leaves; FIFO would starve PDF roots). New
+  `dag-pb` still waits when the live queue is already UnixFS
 - counts distinct peers per CID; prefers `prefer_min_peer_count` (2),
   falls back to `min_peer_count` (1)
 
-Workers take **raw / dag-pb / `.pdf` first**. A `source=report` row
-(second vote or a `wrong` report) survives prune/age.
+Workers take **`dag-pb` before raw**, even when the raw CID has more
+peers. A `source=report` row (second vote or a `wrong` report)
+survives prune/age.
 
 Prune drops sniffed rows older than `max_age_seconds` (900). Cap is
 400 live `discovered`/`processing` rows. Folders are not pruned as a

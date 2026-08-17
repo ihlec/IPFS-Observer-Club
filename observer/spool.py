@@ -47,7 +47,12 @@ def _record(conn, line):
 
     queued = conn.execute("SELECT 1 FROM cids WHERE cid = ?", (cid,)).fetchone()
     if queued is None and work.at_cap(conn):
-        return None
+        # Bitswap WANTs are mostly raw leaves. Holding the offset there
+        # starves UnixFS file roots (PDFs) sitting in later spool files.
+        if codec != "dag-pb":
+            return 0, 1
+        if not work.evict_for_unixfs(conn):
+            return None
 
     conn.execute(
         "INSERT OR IGNORE INTO seen_cids(cid, first_seen) VALUES (?, ?)",

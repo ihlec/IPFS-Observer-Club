@@ -260,9 +260,11 @@ def prune(conn=None):
                 "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
                 "AND IFNULL(source, 'sniff') != 'report' "
                 "ORDER BY "
-                "  CASE WHEN codec IN ('raw', 'dag-pb') "
+                "  CASE WHEN codec = 'dag-pb' "
                 "         OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
-                "       THEN 1 ELSE 0 END ASC, "
+                "       THEN 2 "
+                "       WHEN codec = 'raw' THEN 1 "
+                "       ELSE 0 END ASC, "
                 "  last_seen ASC LIMIT ?",
                 (extra,),
             ).fetchall()
@@ -324,6 +326,10 @@ _DOC_SQL = (
     "(codec IN ('raw', 'dag-pb') OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
     "OR IFNULL(source, 'sniff') = 'report')"
 )
+_UNIXFS_SQL = (
+    "(codec = 'dag-pb' OR lower(IFNULL(filename,'')) LIKE '%.pdf' "
+    "OR IFNULL(source, 'sniff') = 'report')"
+)
 
 
 def _select_discovered(conn, extra_where, min_peers, max_first_seen,
@@ -337,9 +343,24 @@ def _select_discovered(conn, extra_where, min_peers, max_first_seen,
         "  AND attempts < ? "
         "  AND IFNULL(codec, '') NOT IN ('libp2p-key', 'json', 'dag-json') "
         "  AND " + extra_where + " "
-        "ORDER BY peer_count DESC, last_seen DESC LIMIT ?",
+        "ORDER BY CASE WHEN codec = 'dag-pb' THEN 0 ELSE 1 END, "
+        "  peer_count DESC, last_seen DESC LIMIT ?",
         (min_peers, max_first_seen, min_last_seen, attempt_cap, limit),
     ).fetchall()
+
+
+def evict_for_unixfs(conn, n=1):
+    """Free live slots occupied by raw WANTs so a UnixFS file can be queued."""
+    rows = conn.execute(
+        "SELECT cid FROM cids WHERE status = 'discovered' "
+        "AND IFNULL(source, 'sniff') != 'report' "
+        "AND IFNULL(codec, '') != 'dag-pb' "
+        "ORDER BY last_seen ASC LIMIT ?",
+        (n,),
+    ).fetchall()
+    for row in rows:
+        forget_cid(conn, row[0])
+    return len(rows)
 
 
 def take_batch(conn, limit=5):
@@ -355,13 +376,20 @@ def take_batch(conn, limit=5):
     prefer = max(min_peers, prefer_min_peer_count())
     args = (max_first_seen, min_last_seen, attempt_cap)
     with _db_lock:
-        rows = _select_discovered(
-            conn, _DOC_SQL, prefer, *args, limit,
-        )
-        if not rows:
-            rows = _select_discovered(
-                conn, _DOC_SQL, min_peers, *args, limit,
+        rows = list(_select_discovered(
+            conn, _UNIXFS_SQL, min_peers, *args, limit,
+        ))
+        if len(rows) < limit:
+            need = limit - len(rows)
+            extra = _select_discovered(
+                conn, _DOC_SQL, prefer, *args, need,
             )
+            if not extra:
+                extra = _select_discovered(
+                    conn, _DOC_SQL, min_peers, *args, need,
+                )
+            seen = {r["cid"] for r in rows}
+            rows.extend(r for r in extra if r["cid"] not in seen)
         if rows:
             conn.executemany(
                 "UPDATE cids SET status = 'processing' WHERE cid = ?",
