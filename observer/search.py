@@ -35,6 +35,21 @@ def _decorate(conn, rows):
 _FIELD_WHERE = "(%s.field = ? OR %s.cid IN (SELECT cid FROM classifies WHERE field = ?))"
 
 
+_CATALOG_MIMES = ("text/html", "application/pdf")
+
+
+def _mime_sql(column, mime):
+    """Restrict listings to PDF and HTML. XHTML counts as HTML."""
+    if mime == "application/pdf":
+        return " AND %s = 'application/pdf'" % column, []
+    if mime == "text/html":
+        return (
+            " AND %s IN ('text/html', 'application/xhtml+xml')" % column,
+            [],
+        )
+    return "", []
+
+
 def search(query, field=None, mime=None, limit=50):
     conn = store.connect()
     sql = (
@@ -47,9 +62,9 @@ def search(query, field=None, mime=None, limit=50):
     if field:
         sql += " AND " + (_FIELD_WHERE % ("d", "d"))
         params.extend((field, field))
-    if mime:
-        sql += " AND d.mime_type LIKE ?"
-        params.append("%" + mime + "%")
+    extra, extra_params = _mime_sql("d.mime_type", mime)
+    sql += extra
+    params.extend(extra_params)
     sql += " ORDER BY rank LIMIT ?"
     limit = int(limit)
     params.append(min(limit * 3 if field else limit, 600))
@@ -66,9 +81,9 @@ def browse(field=None, mime=None, limit=20, offset=0):
     if field:
         where += " AND " + (_FIELD_WHERE % ("docs", "docs"))
         params.extend((field, field))
-    if mime:
-        where += " AND mime_type LIKE ?"
-        params.append("%" + mime + "%")
+    extra, extra_params = _mime_sql("mime_type", mime)
+    where += extra
+    params.extend(extra_params)
     total = conn.execute(
         "SELECT COUNT(*) FROM docs " + where, params
     ).fetchone()[0]
@@ -135,13 +150,8 @@ def abusive_reports():
 
 
 def mimes():
-    conn = store.connect()
-    return [r[0] for r in conn.execute(
-        "SELECT DISTINCT mime_type FROM docs "
-        "WHERE mime_type IS NOT NULL AND mime_type != '' "
-        "AND cid NOT IN (SELECT cid FROM reports WHERE reason = 'abusive') "
-        "ORDER BY mime_type"
-    )]
+    """Datatypes the search filter offers. Only PDF and HTML are in-scope."""
+    return list(_CATALOG_MIMES)
 
 
 def stats():

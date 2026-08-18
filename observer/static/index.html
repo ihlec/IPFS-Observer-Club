@@ -29,9 +29,6 @@
         <option value="">any datatype</option>
         <option value="text/html">text/html</option>
         <option value="application/pdf">application/pdf</option>
-        <option value="text/plain">text/plain</option>
-        <option value="text/markdown">text/markdown</option>
-        <option value="application/xhtml+xml">application/xhtml+xml</option>
       </select>
     </div>
   </div>
@@ -284,13 +281,10 @@ async function loadClub() {
     setMeta();
     const mimeSel = document.getElementById('mime');
     const mimeCur = mimeSel.value;
-    const known = new Set([
-      'text/html', 'application/pdf', 'text/plain',
-      'text/markdown', 'application/xhtml+xml',
-    ]);
-    (c.mimes || []).forEach(m => { if (m) known.add(m); });
     mimeSel.innerHTML = '<option value="">any datatype</option>' +
-      [...known].sort().map(m => `<option>${esc(m)}</option>`).join('');
+      ['text/html', 'application/pdf'].map(
+        m => `<option value="${m}">${m}</option>`
+      ).join('');
     if (mimeCur) mimeSel.value = mimeCur;
   } catch (e) {}
 }

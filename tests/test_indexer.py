@@ -33,7 +33,7 @@ def _discovered(wconn, cid=CID, codec="raw"):
     return wconn.execute("SELECT * FROM cids WHERE cid = ?", (cid,)).fetchone()
 
 
-def _sample(data, mime="text/plain"):
+def _sample(data, mime="text/html"):
     r = FetchResult()
     r.ok = True
     r.data = data

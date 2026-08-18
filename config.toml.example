@@ -59,7 +59,8 @@ timeout_seconds = 6
 connect_timeout_seconds = 5
 request_timeout_seconds = 6
 rate_limit_kbps = 1500
-# Fetch workers. Several classifier hosts can be active at once (/admin).
+# Fetch workers. Half hunt PDFs (UnixFS / named), half hunt HTML (raw),
+# when both lanes have work.
 concurrency = 16
 min_peer_count = 1
 # Sniffed raw (Bitswap leaves) only join the live queue at this peer count.

@@ -44,7 +44,7 @@ def test_prune_caps_queue_to_newest(tmp_path, monkeypatch):
     assert cids == {"bafy-b", "bafy-c"}
 
 
-def test_prune_evicts_folders_before_raw(tmp_path, monkeypatch):
+def test_prune_keeps_one_of_each_lane_at_cap(tmp_path, monkeypatch):
     conn = _conn(tmp_path, monkeypatch, max_queue=1, max_age=3600)
     now = time.time()
     conn.execute(
@@ -58,9 +58,9 @@ def test_prune_evicts_folders_before_raw(tmp_path, monkeypatch):
         ("bafy-pb", "dag-pb", now - 30, now - 30),
     )
     conn.commit()
-    assert work.prune(conn) == 1
+    work.prune(conn)
     cids = {r[0] for r in conn.execute("SELECT cid FROM cids")}
-    assert cids == {"bafy-raw"}
+    assert cids == {"bafy-pb"}
 
 
 def test_take_batch_includes_sniffed_dag_pb(tmp_path, monkeypatch):
@@ -80,6 +80,31 @@ def test_take_batch_includes_sniffed_dag_pb(tmp_path, monkeypatch):
     monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 1)
     rows = work.take_batch(conn, limit=5)
     assert [r["cid"] for r in rows] == ["bafy-pb", "bafy-raw"]
+
+
+def test_take_batch_balances_pdf_and_html_workers(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_age=3600)
+    monkeypatch.setitem(work.config.FETCH, "concurrency", 2)
+    monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 1)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'processing',0)",
+        ("bafy-busy-pdf", "dag-pb", now - 20, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-more-pdf", "dag-pb", now - 20, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,2,2,'discovered',0)",
+        ("bafy-html", "raw", now - 20, now - 5),
+    )
+    conn.commit()
+    rows = work.take_batch(conn, limit=1)
+    assert [r["cid"] for r in rows] == ["bafy-html"]
 
 
 def test_take_batch_skips_lonely_raw(tmp_path, monkeypatch):

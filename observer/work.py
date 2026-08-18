@@ -256,8 +256,8 @@ def enqueue_doc_children(links, skip_cid=None):
                     (filename, cid),
                 )
                 continue
-            if live_count(conn) >= max_queue():
-                if not (evict_dir_probes(conn) or evict_for_unixfs(conn)):
+            if not pdf_can_admit(conn):
+                if not evict_dir_probes(conn):
                     break
             conn.execute(
                 "INSERT INTO cids (cid, codec, first_seen, last_seen, "
@@ -325,8 +325,18 @@ def prefer_min_peer_count():
 
 
 def max_dir_queue():
-    """Live unidentified dag-pb roots. Extra slots stay free for popular raw."""
+    """Live unidentified dag-pb roots. Extra slots stay free for the HTML lane."""
     return int(config.FETCH.get("max_dir_queue", 40))
+
+
+def lane_workers():
+    """In-flight fetch slots per document kind (PDF vs HTML)."""
+    return max(1, int(config.FETCH.get("concurrency", 16)) // 2)
+
+
+def lane_cap():
+    """Live queue slots reserved for each document kind."""
+    return max(1, max_queue() // 2)
 
 
 def prune(conn=None):
@@ -348,6 +358,40 @@ def prune(conn=None):
         for row in stale:
             forget_cid(conn, row[0])
             dropped += 1
+        half = lane_cap()
+        pdf_n = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _PDF_LANE_SQL,
+        ).fetchone()[0]
+        html_n = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _HTML_LANE_SQL,
+        ).fetchone()[0]
+        html_allowed = cap - min(pdf_n, half)
+        extra_html = html_n - html_allowed
+        if extra_html > 0:
+            old = conn.execute(
+                "SELECT cid FROM cids WHERE status = 'discovered' "
+                "AND " + _HTML_LANE_SQL + " "
+                "ORDER BY last_seen ASC LIMIT ?",
+                (extra_html,),
+            ).fetchall()
+            for row in old:
+                forget_cid(conn, row[0])
+                dropped += 1
+            html_n -= extra_html
+        pdf_allowed = cap - min(html_n, half)
+        extra_pdf = pdf_n - pdf_allowed
+        if extra_pdf > 0:
+            old = conn.execute(
+                "SELECT cid FROM cids WHERE status = 'discovered' "
+                "AND " + _PROBE_SQL + " "
+                "ORDER BY last_seen ASC LIMIT ?",
+                (extra_pdf,),
+            ).fetchall()
+            for row in old:
+                forget_cid(conn, row[0])
+                dropped += 1
         extra = conn.execute(
             "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing')"
         ).fetchone()[0] - cap
@@ -465,6 +509,14 @@ _PROBE_SQL = (
     "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf'"
 )
 _FILL_SQL = "(" + _DOC_SQL + ") AND NOT (" + _PROBE_SQL + ")"
+_PDF_LANE_SQL = (
+    "("
+    "lower(IFNULL(filename,'')) LIKE '%.pdf' "
+    "OR IFNULL(source, 'sniff') = 'named' "
+    "OR codec = 'dag-pb'"
+    ")"
+)
+_HTML_LANE_SQL = "NOT (" + _PDF_LANE_SQL + ")"
 
 
 _TAKE_ORDER = (
@@ -513,7 +565,10 @@ def evict_for_unixfs(conn, n=1):
 
 
 def max_dir_probes():
-    return int(config.FETCH.get("max_dir_probes", 4))
+    """Concurrent unidentified dag-pb fetches. Default is half the workers."""
+    if "max_dir_probes" in config.FETCH:
+        return int(config.FETCH.get("max_dir_probes"))
+    return lane_workers()
 
 
 def dir_queue_count(conn=None):
@@ -555,8 +610,82 @@ def _extend(rows, extra):
     return rows
 
 
+def pdf_live_count(conn=None):
+    """Named PDFs and sniffed dag-pb occupying the live queue."""
+    conn = conn or connect()
+    with _db_lock:
+        return conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _PDF_LANE_SQL,
+        ).fetchone()[0]
+
+
+def html_live_count(conn=None):
+    """Sniffed raw occupying the live queue (HTML hunt)."""
+    conn = conn or connect()
+    with _db_lock:
+        return conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _HTML_LANE_SQL,
+        ).fetchone()[0]
+
+
+def html_can_admit(conn=None):
+    """True when the HTML lane can take another sniffed raw CID."""
+    conn = conn or connect()
+    with _db_lock:
+        pdf_n = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _PDF_LANE_SQL,
+        ).fetchone()[0]
+        html_n = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _HTML_LANE_SQL,
+        ).fetchone()[0]
+        return html_n < max_queue() - min(pdf_n, lane_cap())
+
+
+def pdf_can_admit(conn=None):
+    """True when the PDF lane can take another dag-pb or named CID."""
+    conn = conn or connect()
+    with _db_lock:
+        pdf_n = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _PDF_LANE_SQL,
+        ).fetchone()[0]
+        html_n = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _HTML_LANE_SQL,
+        ).fetchone()[0]
+        return pdf_n < max_queue() - min(html_n, lane_cap())
+
+
+def _lane_busy(conn, sql):
+    return conn.execute(
+        "SELECT COUNT(*) FROM cids WHERE status = 'processing' AND " + sql
+    ).fetchone()[0]
+
+
+def _pick_one(conn, extra_where, min_peers, args):
+    rows = _select_discovered(conn, extra_where, min_peers, *args, 1)
+    return rows[0] if rows else None
+
+
+def _next_pdf(conn, min_peers, args):
+    row = _pick_one(conn, _NAMED_SQL, min_peers, args)
+    if row is not None:
+        return row
+    if dir_probe_count(conn) < max_dir_probes():
+        return _pick_one(conn, _PROBE_SQL, min_peers, args)
+    return None
+
+
+def _next_html(conn, prefer, args):
+    return _pick_one(conn, _HTML_LANE_SQL, prefer, args)
+
+
 def take_batch(conn, limit=5):
-    """Claim work. Named/report and dag-pb first; sniffed raw only if popular."""
+    """Claim work. Half the workers hunt PDFs, half hunt HTML, when both exist."""
     now = time.time()
     max_first_seen = now - int(config.FETCH.get("min_age_seconds", 10))
     min_last_seen = now - max_age_seconds()
@@ -567,26 +696,50 @@ def take_batch(conn, limit=5):
     min_peers = int(config.FETCH.get("min_peer_count", 1))
     prefer = max(min_peers, prefer_min_peer_count())
     args = (max_first_seen, min_last_seen, attempt_cap)
+    half = lane_workers()
     with _db_lock:
-        rows = list(_select_discovered(
-            conn, _NAMED_SQL, min_peers, *args, limit,
-        ))
-        if len(rows) < limit:
-            room = max(0, max_dir_probes() - dir_probe_count(conn))
-            need_pb = min(limit - len(rows), room)
-            if need_pb:
-                _extend(rows, _select_discovered(
-                    conn, _PROBE_SQL, min_peers, *args, need_pb,
-                ))
-        if len(rows) < limit:
-            need = limit - len(rows)
-            extra = _select_discovered(conn, _FILL_SQL, prefer, *args, need)
-            _extend(rows, extra)
-        if rows:
-            conn.executemany(
-                "UPDATE cids SET status = 'processing' WHERE cid = ?",
-                [(r["cid"],) for r in rows],
+        rows = []
+        pdf_extra = 0
+        html_extra = 0
+        for _ in range(limit):
+            report = _pick_one(
+                conn, "IFNULL(source, 'sniff') = 'report'", min_peers, args,
             )
+            if report is not None:
+                rows.append(report)
+                conn.execute(
+                    "UPDATE cids SET status = 'processing' WHERE cid = ?",
+                    (report["cid"],),
+                )
+                continue
+            pdf_busy = _lane_busy(conn, _PDF_LANE_SQL) + pdf_extra
+            html_busy = _lane_busy(conn, _HTML_LANE_SQL) + html_extra
+            pdf_row = _next_pdf(conn, min_peers, args)
+            html_row = _next_html(conn, prefer, args)
+            pick = None
+            lane = None
+            if pdf_row is not None and html_row is not None:
+                if pdf_busy < half and pdf_busy <= html_busy:
+                    pick, lane = pdf_row, "pdf"
+                elif html_busy < half:
+                    pick, lane = html_row, "html"
+                elif pdf_busy < half:
+                    pick, lane = pdf_row, "pdf"
+            elif pdf_row is not None:
+                pick, lane = pdf_row, "pdf"
+            elif html_row is not None:
+                pick, lane = html_row, "html"
+            if pick is None:
+                break
+            rows.append(pick)
+            conn.execute(
+                "UPDATE cids SET status = 'processing' WHERE cid = ?",
+                (pick["cid"],),
+            )
+            if lane == "pdf":
+                pdf_extra += 1
+            else:
+                html_extra += 1
         return rows
 
 
@@ -615,6 +768,22 @@ def stats():
         out["backlog"] = conn.execute(
             "SELECT COUNT(*) FROM cids WHERE status = 'discovered' AND peer_count >= ?",
             (int(config.FETCH.get("min_peer_count", 1)),),
+        ).fetchone()[0]
+        out["pdf_live"] = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _PDF_LANE_SQL,
+        ).fetchone()[0]
+        out["html_live"] = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status IN ('discovered', 'processing') "
+            "AND " + _HTML_LANE_SQL,
+        ).fetchone()[0]
+        out["pdf_busy"] = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status = 'processing' AND "
+            + _PDF_LANE_SQL,
+        ).fetchone()[0]
+        out["html_busy"] = conn.execute(
+            "SELECT COUNT(*) FROM cids WHERE status = 'processing' AND "
+            + _HTML_LANE_SQL,
         ).fetchone()[0]
         oldest = conn.execute(
             "SELECT MIN(last_seen) FROM cids WHERE status IN ('discovered', 'processing')"

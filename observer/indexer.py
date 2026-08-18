@@ -60,12 +60,16 @@ def log_summary(dropped=0):
     q = work.stats()
     log.info(
         "fetched=%d heuristic=%d llm_skip=%d classified=%d reuse=%d "
-        "mime=%d incomplete=%d dirs=%d named=%d queue=%d dropped=%d %s",
+        "mime=%d incomplete=%d dirs=%d named=%d queue=%d "
+        "pdf=%d/%d html=%d/%d dropped=%d %s",
         snap.get("fetched", 0), snap.get("heuristic_skips", 0),
         snap.get("llm_skips", 0), snap.get("llm_classifies", 0),
         snap.get("reuse", 0), snap.get("mime_skips", 0),
         snap.get("incomplete", 0), snap.get("dir_drops", 0),
-        snap.get("named", 0), q.get("backlog", 0), int(dropped or 0),
+        snap.get("named", 0), q.get("backlog", 0),
+        q.get("pdf_busy", 0), q.get("pdf_live", 0),
+        q.get("html_busy", 0), q.get("html_live", 0),
+        int(dropped or 0),
         classify.backends_status(),
     )
 

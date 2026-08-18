@@ -90,7 +90,7 @@ def test_spool_queues_raw_when_two_peers(tmp_path, monkeypatch):
     assert row["peer_count"] == 2
 
 
-def test_spool_evicts_folder_at_cap_to_admit_popular_raw(tmp_path, monkeypatch):
+def test_spool_does_not_evict_pdf_lane_for_html(tmp_path, monkeypatch):
     spool_dir = tmp_path / "spool"
     spool_dir.mkdir()
     monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
@@ -109,11 +109,11 @@ def test_spool_evicts_folder_at_cap_to_admit_popular_raw(tmp_path, monkeypatch):
         json.dumps({"ts": now, "cid": raw, "peer": "12D3aaa"}) + "\n",
         json.dumps({"ts": now, "cid": raw, "peer": "12D3bbb"}) + "\n",
     ]))
-    assert spool.run_once() == 2
+    assert spool.run_once() == 1
     conn = work.connect()
     rows = {r[0]: r[1] for r in conn.execute("SELECT cid, codec FROM cids")}
-    assert raw in rows and rows[raw] == "raw"
-    assert unixfs not in rows
+    assert unixfs in rows and rows[unixfs] == "dag-pb"
+    assert raw not in rows
 
 
 def test_spool_evicts_raw_at_cap_to_admit_unixfs(tmp_path, monkeypatch):

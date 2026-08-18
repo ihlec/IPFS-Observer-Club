@@ -58,9 +58,11 @@ def test_placeholders_are_not_valid():
 
 
 def test_fingerprint_matches_protocol_and_normalization():
-    text, mime, _, _ = extract.extract_document(b"hello   world\n", "text/plain")
-    assert mime == "text/plain"
-    assert text == "hello world"
+    text, mime, _, _ = extract.extract_document(
+        b"<html><p>hello   world</p></html>", "text/html",
+    )
+    assert mime == "text/html"
+    assert "hello world" in text
     assert extract.fingerprint(text) == protocol.text_sha256("hello world")
     assert extract.fingerprint(text) != extract.fingerprint("hello  world")
 

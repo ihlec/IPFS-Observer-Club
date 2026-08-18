@@ -19,11 +19,20 @@ def test_sniff_filename_css_extension():
     assert extract.sniff_mime(b"not really css", filename="theme.css") == "text/css"
 
 
-def test_plain_prose_stays_text():
+def test_plain_prose_is_not_processable():
     data = (b"Abstract. We report CRISPR genome editing in mice. "
             b"Smith et al. discuss off-target effects. References. ")
     assert extract.sniff_mime(data) == "text/plain"
-    assert extract.processable("text/plain") is True
+    assert extract.processable("text/plain") is False
+
+
+def test_xhtml_sniffs_as_html():
+    data = b'<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><p>Hi</p></html>'
+    assert extract.sniff_mime(data) == "text/html"
+    assert extract.sniff_mime(b"not html", "application/xhtml+xml") == "text/html"
+    text, mime, _, _ = extract.extract_document(data, "application/xhtml+xml")
+    assert mime == "text/html"
+    assert "Hi" in text
 
 
 def test_pick_filename_prefers_extension():

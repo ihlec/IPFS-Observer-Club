@@ -162,10 +162,7 @@ _MAGIC = [
 
 _PROCESSABLE_EXACT = {
     "text/html",
-    "text/plain",
-    "text/markdown",
     "application/pdf",
-    "application/xhtml+xml",
 }
 
 _SOURCE_MIMES = frozenset((
@@ -219,6 +216,8 @@ def _sniff_source(data):
 
 
 def sniff_mime(data, header_mime=None, filename=None):
+    if header_mime == "application/xhtml+xml":
+        header_mime = "text/html"
     named = _filename_ext_mime(filename)
     if named:
         return named
@@ -234,7 +233,8 @@ def sniff_mime(data, header_mime=None, filename=None):
         if data.startswith(magic):
             return mime
     head = data[:2048].lstrip()
-    if head.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML")):
+    if head.startswith((b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML",
+                        b"<?xml")) and b"<html" in data[:2048].lower():
         return "text/html"
     if head.startswith((b"{", b"[")):
         try:
@@ -362,10 +362,12 @@ def _pdf_text(data):
 def extract_document(data, mime=None, filename=None):
     """Return (text, mime, license, license_source). Bytes stay in memory."""
     mime = sniff_mime(data, mime, filename=filename)
+    if mime == "application/xhtml+xml":
+        mime = "text/html"
     if not processable(mime) or not data:
         return "", mime, None, None
     license_name, license_source = None, None
-    if mime in ("text/html", "application/xhtml+xml"):
+    if mime == "text/html":
         text = _html_text(data)
         license_name, license_source = _html_license(data)
     elif mime == "application/pdf":

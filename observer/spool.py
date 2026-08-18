@@ -89,15 +89,13 @@ def _record(conn, line):
         return 0, 1
 
     if codec == "dag-pb":
-        # UnixFS PDFs are dag-pb. Cap unfetched dag-pb, but still evict
-        # raw to admit a file root. Skip only when that cap is full.
+        # UnixFS PDFs are dag-pb. Stay in the PDF lane; do not steal HTML slots.
+        if not work.pdf_can_admit(conn):
+            return 0, 1
         if work.dir_queue_count(conn) >= work.max_dir_queue():
             return 0, 1
-        if work.at_cap(conn) and not work.evict_for_unixfs(conn):
-            return 0, 1
-    elif work.at_cap(conn):
-        if not work.evict_dir_probes(conn):
-            return 0, 1
+    elif not work.html_can_admit(conn):
+        return 0, 1
 
     conn.execute(
         "INSERT INTO cids (cid, codec, first_seen, last_seen, "
@@ -118,8 +116,8 @@ def _save_offset(conn, path, offset):
 def ingest_file(conn, path, final=False):
     """Import one spool file. Commits in small batches so workers are not blocked.
 
-    Extra sniffed folders above max_dir_queue are skipped so later
-    popular raw WANTs can still enter. UnixFS file roots still evict raw.
+    Extra sniffed folders above max_dir_queue are skipped so the HTML
+    lane can still fill. Each lane is capped at half of max_queue.
     """
     inserted = skipped = 0
     paused = False

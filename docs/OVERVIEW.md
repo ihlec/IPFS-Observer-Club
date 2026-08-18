@@ -100,7 +100,7 @@ Restart after a club change.
 | classify (`llm` or `reuse`) | `classifies` + first-seen `docs` | yes |
 | skip `out_of_scope` (legacy `not_academic`) | `skips` | yes |
 | skip `directory` | work queue only (`drop_directory`) | no |
-| skip `unprocessable` (images, CSS, JS, short PDFs) | work queue only | no |
+| skip `unprocessable` (images, CSS, JS, plain, short PDFs) | work queue only | no |
 | skip `incomplete` (PDF did not arrive whole) | work queue only | no |
 | `llm_disagreed` | work queue, expires like unprocessable | no |
 | claim | `claims` keyed by **publisher** | yes, short lease |
@@ -147,25 +147,29 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
   folder is not cataloged. HTML in a folder is left to ordinary
   Bitswap sniff. No full tree walk.
 - drops CIDs this node already marked locally unprocessable
-- at cap, **evicts raw** to admit UnixFS `dag-pb` (PDF file roots)
-  until `max_dir_queue` (40) unfetched dag-pb sit on the queue; extra
-  folders are skipped. **Evicts folders** to admit raw that already
-  has `prefer_min_peer_count` peers. Named PDFs still evict raw if
-  needed.
+- splits the live queue into **PDF** (`dag-pb`, named `*.pdf`) and
+  **HTML** (sniffed `raw`) lanes. Each is guaranteed half of
+  `max_queue` when both have work; one lane may use leftover slots if
+  the other is empty. Lanes do not evict each other.
 - counts distinct peers per CID. Sniffed **raw** only enters the live
   queue at `prefer_min_peer_count` (2); `dag-pb` roots, named PDFs, and
   reports still fetch at `min_peer_count` (1). Peer rows are kept so a
   later WANT can promote a held CID.
 
-Workers take **named PDFs, then HTML, then at most `max_dir_probes`
-(4) sniffed folders, then raw with enough peers**. A `source=report`
-row (second vote or a `wrong` report) or `source=named` (PDF from a
-dropped folder) survives prune/age.
+Workers split **half and half** when both lanes have work (`concurrency`
+16 → 8 PDF, 8 HTML). PDF work is named PDFs then sniffed `dag-pb`
+(default `max_dir_probes` = 8). HTML work is popular raw. A
+`source=report` row (second vote or a `wrong` report) is taken first.
+`source=named` survives prune/age.
+
+Only **`application/pdf` and `text/html`** are classified. `text/plain`
+and other types are local mime skips. Search lists those two datatypes
+only; XHTML is stored as HTML.
 
 Prune drops sniffed rows older than `max_age_seconds` (900) and sniffed
 raw below `prefer_min_peer_count`. Cap is 400 live
 `discovered`/`processing` rows. At most `max_dir_queue` (40) sniffed
-folders sit on that queue. Folders are forgotten after fetch via
+folders sit on the PDF lane. Folders are forgotten after fetch via
 `drop_directory`. Gateway fetches give up after 6s.
 
 ## Skip-hook
@@ -241,7 +245,7 @@ flowchart TD
   fetch --> dir{UnixFS directory?}
   dir -->|yes| named["queue named .pdf children (HAMT peek)"]
   named --> gdir["local drop_directory"]
-  dir -->|no| mime{PDF / HTML / prose?}
+  dir -->|no| mime{PDF or HTML?}
   mime -->|no| loc["local unprocessable / remember binary"]
   mime -->|yes| fp{same text_sha256 and hook allows reuse?}
   mime -->|"pdf, not whole"| inc["local incomplete — retry later, no gossip"]

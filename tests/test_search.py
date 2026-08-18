@@ -125,3 +125,23 @@ def test_search_matches_label_prefixes(tmp_path, monkeypatch):
     assert [r["cid"] for r in search.search("cris")] == [CID1]
     assert [r["cid"] for r in search.search("geno")] == [CID1]
     assert search.search("phys") == []
+
+
+def test_mimes_are_html_and_pdf():
+    assert search.mimes() == ["text/html", "application/pdf"]
+
+
+def test_browse_html_includes_legacy_xhtml(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    store.ingest_message(conn, {
+        "kind": "classify", "cid": CID1, "publisher": "first",
+        "field": "biology", "mime_type": "application/xhtml+xml", "v": 1,
+    }, received_at=1)
+    store.ingest_message(conn, {
+        "kind": "classify", "cid": CID2, "publisher": "first",
+        "field": "biology", "mime_type": "text/plain", "v": 1,
+    }, received_at=2)
+    monkeypatch.setattr(search, "store", store)
+    rows, total = search.browse(mime="text/html", limit=10)
+    assert total == 1
+    assert [r["cid"] for r in rows] == [CID1]
