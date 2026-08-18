@@ -186,20 +186,49 @@ def test_expire_local_unprocessable(tmp_path, monkeypatch):
     assert rows["bafy-keep"] == "skipped"
 
 
-def test_expire_reques_scope_skipped_pdfs(tmp_path, monkeypatch):
-    conn = _conn(tmp_path, monkeypatch)
-    now = time.time()
+def _insert_skipped_pdf(conn, cid, checked_at):
     conn.execute(
         "INSERT INTO cids(cid, codec, first_seen, last_seen, last_checked, "
         "peer_count, want_count, status, attempts, mime_type, error) "
-        "VALUES ('bafy-pdf','dag-pb',?,?,?,1,1,'skipped',0,'application/pdf','out_of_scope')",
-        (now, now, now),
+        "VALUES (?,'dag-pb',?,?,?,1,1,'skipped',0,'application/pdf','out_of_scope')",
+        (cid, checked_at, checked_at, checked_at),
     )
     conn.commit()
+
+
+def test_expire_requeues_scope_skipped_pdfs_after_ttl(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    ttl = work.skip_ttl_seconds()
+    _insert_skipped_pdf(conn, "bafy-pdf", time.time() - ttl - 60)
     assert work.expire_local_skips(conn) == 1
     row = conn.execute("SELECT status, error FROM cids WHERE cid='bafy-pdf'").fetchone()
     assert row["status"] == "discovered"
     assert row["error"] == "pdf_retry"
+
+
+def test_expire_leaves_fresh_scope_skipped_pdf_alone(tmp_path, monkeypatch):
+    """A PDF skipped moments ago must not be refetched on the next prune."""
+    conn = _conn(tmp_path, monkeypatch)
+    _insert_skipped_pdf(conn, "bafy-pdf", time.time())
+    assert work.expire_local_skips(conn) == 0
+    row = conn.execute("SELECT status FROM cids WHERE cid='bafy-pdf'").fetchone()
+    assert row["status"] == "skipped"
+
+
+def test_expire_requeues_incomplete_pdf(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch)
+    ttl = work.skip_ttl_seconds()
+    then = time.time() - ttl - 60
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, last_checked, "
+        "peer_count, want_count, status, attempts, mime_type, error) "
+        "VALUES ('bafy-inc','dag-pb',?,?,?,1,1,'skipped',0,'application/pdf','incomplete')",
+        (then, then, then),
+    )
+    conn.commit()
+    assert work.expire_local_skips(conn) >= 1
+    row = conn.execute("SELECT status FROM cids WHERE cid='bafy-inc'").fetchone()
+    assert row["status"] == "discovered"
 
 
 def test_prune_keeps_named(tmp_path, monkeypatch):

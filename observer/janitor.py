@@ -54,6 +54,28 @@ def _evict_batch(conn, now):
     return len(rows)
 
 
+EVICTED_KEEP = 50000
+
+
+def _trim_evicted(conn):
+    with work.locked():
+        n = conn.execute(
+            "DELETE FROM evicted WHERE cid IN ("
+            "  SELECT cid FROM evicted ORDER BY evicted_at DESC "
+            "  LIMIT -1 OFFSET ?)",
+            (EVICTED_KEEP,),
+        ).rowcount
+        conn.commit()
+    return n
+
+
+def _reclaim(conn):
+    with work.locked():
+        conn.execute("PRAGMA incremental_vacuum")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.commit()
+
+
 def run_once():
     conn = work.connect()
     dropped = work.prune(conn)
@@ -63,24 +85,18 @@ def run_once():
     if not over:
         return 0
     target = budget * LOW_WATER
-    total = 0
     log.warning("work-queue disk budget exceeded (db=%.1f MB), evicting", size / 1e6)
+    # Reclaim bookkeeping before touching live WANTs: the evicted ledger can be
+    # most of the file, and dropping real work to make room for it is backwards.
+    _trim_evicted(conn)
+    _reclaim(conn)
+    total = 0
     while work.db_file_size() > target:
         n = evict_batch(conn)
-        total += n
         if n == 0:
             break
-        with work.locked():
-            conn.execute("PRAGMA incremental_vacuum")
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.commit()
-    with work.locked():
-        conn.execute(
-            "DELETE FROM evicted WHERE cid IN ("
-            "  SELECT cid FROM evicted ORDER BY evicted_at DESC "
-            "  LIMIT -1 OFFSET 50000)"
-        )
-        conn.commit()
+        total += n
+        _reclaim(conn)
     if total:
         log.info("evicted %d work-queue CIDs", total)
     return total

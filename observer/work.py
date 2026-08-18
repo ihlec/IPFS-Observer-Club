@@ -231,10 +231,10 @@ def enqueue_doc_children(links, skip_cid=None):
     min_age = int(config.FETCH.get("min_age_seconds", 10))
     first = now - min_age - 1
     n = 0
+    if not picked:
+        return 0
     with locked() as conn:
         drop_named_non_pdf(conn)
-        if not picked:
-            return 0
         named_n = conn.execute(
             "SELECT COUNT(*) FROM cids WHERE IFNULL(source, 'sniff') = 'named' "
             "AND status IN ('discovered', 'processing')"
@@ -303,7 +303,7 @@ def prefer_min_peer_count():
 
 
 def max_dir_queue():
-    """Live sniffed folders. Extra slots stay free for raw HTML."""
+    """Live unidentified dag-pb roots. Extra slots stay free for raw HTML."""
     return int(config.FETCH.get("max_dir_queue", 40))
 
 
@@ -371,20 +371,25 @@ def expire_local_skips(conn=None):
     ttl = skip_ttl_seconds()
     n = 0
     with _db_lock:
+        if ttl <= 0:
+            return n
+        cutoff = time.time() - ttl
+        # PDFs get another pass because an early verdict was usually made on a
+        # sample that never extracted. Without the age bound this requeued the
+        # same PDFs on every prune and refetched them in a loop.
         n += conn.execute(
             "UPDATE cids SET status = 'discovered', attempts = 0, error = 'pdf_retry' "
             "WHERE status = 'skipped' "
             "AND mime_type = 'application/pdf' "
             "AND IFNULL(error, '') IN "
-            "('out_of_scope', 'not_academic', 'not_academic_document')"
+            "('out_of_scope', 'not_academic', 'not_academic_document') "
+            "AND IFNULL(last_checked, last_seen) < ?",
+            (cutoff,),
         ).rowcount
-        if ttl <= 0:
-            return n
-        cutoff = time.time() - ttl
         n += conn.execute(
             "UPDATE cids SET status = 'discovered', attempts = 0, error = 'skip_expired' "
             "WHERE status = 'skipped' "
-            "AND IFNULL(error, '') IN ('unprocessable', 'llm_disagreed') "
+            "AND IFNULL(error, '') IN ('unprocessable', 'llm_disagreed', 'incomplete') "
             "AND IFNULL(mime_type, '') NOT LIKE 'image/%' "
             "AND IFNULL(mime_type, '') NOT LIKE 'video/%' "
             "AND IFNULL(mime_type, '') NOT LIKE 'audio/%' "
@@ -428,6 +433,9 @@ _DOC_SQL = (
 _NAMED_SQL = (
     "(" + _KEEP_SRC + " OR lower(IFNULL(filename,'')) LIKE '%.pdf')"
 )
+# A sniffed dag-pb WANT is a UnixFS root, but whether it is a folder or a PDF
+# file root is only known after one block is fetched. These rows are therefore
+# "unidentified dag-pb", not folders, and they share one budget.
 _PROBE_SQL = (
     "codec = 'dag-pb' AND NOT " + _KEEP_SRC + " "
     "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf'"
@@ -485,7 +493,7 @@ def max_dir_probes():
 
 
 def dir_queue_count(conn=None):
-    """Sniffed folders occupying the live queue."""
+    """Sniffed dag-pb roots occupying the live queue (folders and PDF roots)."""
     conn = conn or connect()
     with _db_lock:
         return conn.execute(
@@ -495,7 +503,7 @@ def dir_queue_count(conn=None):
 
 
 def evict_dir_probes(conn, n=1):
-    """Free live slots occupied by sniffed folders."""
+    """Free live slots occupied by sniffed dag-pb roots."""
     rows = conn.execute(
         "SELECT cid FROM cids WHERE status = 'discovered' "
         "AND " + _PROBE_SQL + " "
@@ -508,7 +516,7 @@ def evict_dir_probes(conn, n=1):
 
 
 def dir_probe_count(conn=None):
-    """Sniffed dag-pb (folders) currently occupying a worker."""
+    """Sniffed dag-pb roots currently occupying a worker."""
     conn = conn or connect()
     with _db_lock:
         return conn.execute(

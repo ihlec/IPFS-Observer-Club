@@ -35,6 +35,7 @@ class _Host:
         self.last_429 = 0.0
         self.avail_ts = None
         self.avail_ok = False
+        self.probing = False
         self.model = None
 
     def is_paused(self):
@@ -94,13 +95,12 @@ def _ensure_host(pid):
         return host
 
 
-def _schema():
-    profile = club.current()
+def _build_schema(profile):
     return {
         "type": "json_schema",
         "json_schema": {
             "name": "cid_classification",
-                "strict": True,
+            "strict": True,
             "schema": {
                 "type": "object",
                 "properties": {
@@ -133,6 +133,27 @@ def _schema():
             },
         },
     }
+
+
+_prompt_cache = {}
+
+
+def _prompt_parts():
+    """Cached (system prompt, response schema) for the joined club.
+
+    Both are pure functions of the club profile, and a single classify could
+    rebuild them nine times across payload and length retries.
+    """
+    profile = club.current()
+    cached = _prompt_cache.get(profile.id)
+    if cached is None or cached[0] is not profile:
+        cached = (profile, profile.system_prompt(), _build_schema(profile))
+        _prompt_cache[profile.id] = cached
+    return cached[1], cached[2]
+
+
+def _schema():
+    return _prompt_parts()[1]
 
 
 def _headers(prov=None):
@@ -202,6 +223,11 @@ def _response_detail(resp):
 
 
 def _host_up(prov, host):
+    """Cached reachability probe. Never holds a lock across the request.
+
+    Every fetch worker calls ``available()`` each loop, so probing under
+    ``host.lock`` made 16 workers queue behind one 5s HTTP timeout.
+    """
     now = time.monotonic()
     with host.lock:
         if host.pause_until:
@@ -212,15 +238,23 @@ def _host_up(prov, host):
         ttl = 60.0 if host.avail_ok else 5.0
         if host.avail_ts is not None and now - host.avail_ts < ttl:
             return host.avail_ok
-        try:
-            _session.get(
-                prov["base_url"] + "/models", headers=_headers(prov), timeout=5,
-            ).raise_for_status()
-            host.avail_ok = True
-        except requests.RequestException:
-            host.avail_ok = False
-        host.avail_ts = now
-        return host.avail_ok
+        if host.probing:
+            # Another thread is already asking; use the last known answer.
+            return host.avail_ok
+        host.probing = True
+
+    try:
+        _session.get(
+            prov["base_url"] + "/models", headers=_headers(prov), timeout=5,
+        ).raise_for_status()
+        ok = True
+    except requests.RequestException:
+        ok = False
+    with host.lock:
+        host.avail_ok = ok
+        host.avail_ts = time.monotonic()
+        host.probing = False
+    return ok
 
 
 def available():
@@ -342,18 +376,19 @@ def _reply_hint(message):
 
 
 def _request(prov, host, text, mime, filename, codec, max_chars):
+    system_prompt, schema = _prompt_parts()
     user = (
         "Datatype: %s\nCodec: %s\nFilename: %s\n\nContent sample:\n%s"
         % (mime or "unknown", codec or "unknown", (filename or "unknown")[:120],
            text[:max_chars])
     )
     messages = [
-        {"role": "system", "content": club.current().system_prompt()},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user},
     ]
     attempts = (
-        {"response_format": _schema(), "reasoning_effort": "none"},
-        {"response_format": _schema()},
+        {"response_format": schema, "reasoning_effort": "none"},
+        {"response_format": schema},
         {},
     )
     last = None

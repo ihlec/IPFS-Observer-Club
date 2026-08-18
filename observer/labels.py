@@ -42,14 +42,18 @@ def _split_keywords(value):
     return out
 
 
+def _prefer_independent(rows):
+    """Reuse copies do not vote, unless a CID has nothing else."""
+    independent = [r for r in rows if _classifier_kind(r) != "reuse"]
+    return independent or rows
+
+
 def _eligible(conn, cid):
-    rows = conn.execute(
+    rows = [dict(raw) for raw in conn.execute(
         "SELECT * FROM classifies WHERE cid = ? ORDER BY received_at ASC",
         (cid,),
-    ).fetchall()
-    out = [dict(raw) for raw in rows]
-    independent = [r for r in out if _classifier_kind(r) != "reuse"]
-    return independent or out
+    )]
+    return _prefer_independent(rows)
 
 
 def independent_publishers(conn, cid):
@@ -59,6 +63,8 @@ def independent_publishers(conn, cid):
         (cid,),
     )]
     independent = [r for r in rows if _classifier_kind(r) != "reuse"]
+    if not independent:
+        return []
     return [r["publisher"] for r in _latest_per_publisher(independent)]
 
 
@@ -93,7 +99,7 @@ def _winner(votes, display):
     return None
 
 
-def _keep_keywords(votes, display, n_voters):
+def _keep_keywords(votes, display):
     if not votes:
         return []
     kept = [(k, votes[k]) for k in votes]
@@ -101,10 +107,9 @@ def _keep_keywords(votes, display, n_voters):
     return [display[k] for k, _ in kept[:10]]
 
 
-def consensus(conn, cid):
-    """Return display labels plus vote tallies for one CID."""
-    voters = _latest_per_publisher(_eligible(conn, cid))
-    n = len(voters)
+def _tally(rows):
+    """Vote across already-loaded classify rows for one CID."""
+    voters = _latest_per_publisher(rows)
     field_items = []
     topic_items = []
     keyword_items = []
@@ -120,20 +125,65 @@ def consensus(conn, cid):
     field_votes, field_disp = _count(field_items)
     topic_votes, topic_disp = _count(topic_items)
     keyword_votes, keyword_disp = _count(keyword_items)
-    keywords = _keep_keywords(keyword_votes, keyword_disp, n)
     return {
         "field": _winner(field_votes, field_disp),
         "topic": _winner(topic_votes, topic_disp),
-        "keywords": ", ".join(keywords),
-        "label_voters": n,
+        "keywords": ", ".join(_keep_keywords(keyword_votes, keyword_disp)),
+        "label_voters": len(voters),
         "field_votes": field_votes,
         "topic_votes": topic_votes,
         "keyword_votes": keyword_votes,
     }
 
 
+def consensus(conn, cid):
+    """Return display labels plus vote tallies for one CID."""
+    return _tally(_eligible(conn, cid))
+
+
+# SQLite's default parameter limit is 999; stay well inside it.
+_IN_CHUNK = 400
+
+
+def consensus_many(conn, cids):
+    """Votes for many CIDs, keyed by CID.
+
+    Search and browse decorate every row, so a per-CID query made result
+    pages cost one round trip per hit and made export cost thousands.
+    """
+    order = list(dict.fromkeys(cid for cid in cids if cid))
+    if not order:
+        return {}
+    grouped = {cid: [] for cid in order}
+    for start in range(0, len(order), _IN_CHUNK):
+        chunk = order[start:start + _IN_CHUNK]
+        placeholders = ",".join("?" * len(chunk))
+        for raw in conn.execute(
+            "SELECT * FROM classifies WHERE cid IN (%s) "
+            "ORDER BY received_at ASC" % placeholders,
+            chunk,
+        ):
+            row = dict(raw)
+            bucket = grouped.get(row["cid"])
+            if bucket is not None:
+                bucket.append(row)
+    return {
+        cid: _tally(_prefer_independent(rows))
+        for cid, rows in grouped.items()
+    }
+
+
 def apply(out, conn, cid):
     """Overwrite display labels on a classify dict with the club vote."""
-    voted = consensus(conn, cid)
-    out.update(voted)
+    out.update(consensus(conn, cid))
     return out
+
+
+def apply_many(conn, rows):
+    """Overwrite display labels on many classify dicts with the club vote."""
+    votes = consensus_many(conn, [row["cid"] for row in rows])
+    for row in rows:
+        voted = votes.get(row["cid"])
+        if voted:
+            row.update(voted)
+    return rows

@@ -283,6 +283,15 @@ def processable(mime):
     return mime in _PROCESSABLE_EXACT
 
 
+def needs_whole_file(mime):
+    """True when a prefix of the file cannot be extracted at all.
+
+    PDF stores its cross-reference table at the end, so a truncated sample
+    yields no text and must not be classified from what did arrive.
+    """
+    return mime == "application/pdf"
+
+
 def usable_text(text, mime=None):
     """False for empty extracts and image-only / scanned PDFs."""
     text = text or ""
@@ -293,17 +302,42 @@ def usable_text(text, mime=None):
     return True
 
 
-def _html_text(data):
+_SCRIPT_RE = re.compile(rb"<script.*?</script>|<style.*?</style>", re.S | re.I)
+_TAG_RE = re.compile(rb"<[^>]+>")
+
+
+def _load_trafilatura():
+    """Resolve the article extractor once.
+
+    A failed import is not cached by Python, so importing inside the per-page
+    path retried the whole lxml chain for every document and silently fell
+    back to tag stripping. Resolving once makes the degradation visible.
+    """
     try:
         import trafilatura
-        text = trafilatura.extract(data.decode("utf-8", errors="replace"))
-        if text:
-            return text
-    except Exception:
-        pass
-    txt = re.sub(rb"<script.*?</script>|<style.*?</style>", b" ", data,
-                 flags=re.S | re.I)
-    txt = re.sub(rb"<[^>]+>", b" ", txt)
+        return trafilatura.extract
+    except Exception as e:
+        log.warning(
+            "trafilatura unavailable (%s); HTML text falls back to tag "
+            "stripping, which lowers classify quality. Fix with "
+            "'pip install -r requirements.txt'", e,
+        )
+        return None
+
+
+_trafilatura_extract = _load_trafilatura()
+
+
+def _html_text(data):
+    html = data.decode("utf-8", errors="replace")
+    if _trafilatura_extract is not None:
+        try:
+            text = _trafilatura_extract(html)
+            if text:
+                return text
+        except Exception:
+            pass
+    txt = _TAG_RE.sub(b" ", _SCRIPT_RE.sub(b" ", data))
     return " ".join(txt.decode("utf-8", errors="replace").split())
 
 

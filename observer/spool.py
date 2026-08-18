@@ -48,8 +48,11 @@ def _record(conn, line):
     queued = conn.execute("SELECT 1 FROM cids WHERE cid = ?", (cid,)).fetchone()
     if queued is None:
         if codec == "dag-pb":
-            # Folders must not fill the live cap. Raw HTML needs the slots.
-            if work.dir_queue_count(conn) >= work.max_dir_queue() or work.at_cap(conn):
+            # UnixFS PDFs are dag-pb. Cap unfetched dag-pb, but still evict
+            # raw to admit a file root. Skip only when that cap is full.
+            if work.dir_queue_count(conn) >= work.max_dir_queue():
+                return 0, 1
+            if work.at_cap(conn) and not work.evict_for_unixfs(conn):
                 return 0, 1
         elif work.at_cap(conn):
             if not work.evict_dir_probes(conn):
@@ -108,7 +111,8 @@ def _save_offset(conn, path, offset):
 def ingest_file(conn, path, final=False):
     """Import one spool file. Commits in small batches so workers are not blocked.
 
-    Extra sniffed folders are skipped so later raw WANTs can still enter.
+    Extra sniffed folders above max_dir_queue are skipped so later
+    raw WANTs can still enter. UnixFS file roots still evict raw.
     """
     inserted = skipped = 0
     paused = False

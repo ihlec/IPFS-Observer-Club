@@ -99,6 +99,7 @@ Restart after a club change.
 | skip `out_of_scope` (legacy `not_academic`) | `skips` | yes |
 | skip `directory` | work queue only (`drop_directory`) | no |
 | skip `unprocessable` (images, CSS, JS, short PDFs) | work queue only | no |
+| skip `incomplete` (PDF did not arrive whole) | work queue only | no |
 | `llm_disagreed` | work queue, expires like unprocessable | no |
 | claim | `claims` keyed by **publisher** | yes, short lease |
 | report `wrong` / `abusive` / `clear` | `reports` keyed by `(cid, publisher)` | yes |
@@ -144,8 +145,10 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
   folder is not cataloged. HTML in a folder is left to ordinary
   Bitswap sniff. No full tree walk.
 - drops CIDs this node already marked locally unprocessable
-- at cap, **skips new folders** (`max_dir_queue` = 40) and **evicts
-  folders** to admit raw HTML. Named PDFs still evict raw if needed.
+- at cap, **evicts raw** to admit UnixFS `dag-pb` (PDF file roots)
+  until `max_dir_queue` (40) unfetched dag-pb sit on the queue; extra
+  folders are skipped. **Evicts folders** to admit raw HTML. Named
+  PDFs still evict raw if needed.
 - counts distinct peers per CID; prefers `prefer_min_peer_count` (2),
   falls back to `min_peer_count` (1)
 
@@ -177,10 +180,12 @@ flowchart TD
 - **Classify** — do not fetch, unless `must_classify` (below).
 - **Foreign claim** — park until `until` or a classify/skip lands. This
   node’s **own** lease is ignored so a claim cannot stall the claimer.
-- **Skip** — do not fetch if the skip is live. `out_of_scope` persists.
-  `directory` skips that still arrive from older nodes also persist, but
-  this node does not publish them. Other skip reasons expire after
-  `skip_ttl_seconds` (6h). A skip never hides a live classify.
+- **Skip** — do not fetch if the skip is live. `out_of_scope` persists,
+  except on a PDF: a peer may have judged it from a partial download, so
+  this node fetches it again. `directory` skips that still arrive from
+  older nodes also persist, but this node does not publish them. Other
+  skip reasons expire after `skip_ttl_seconds` (6h). A skip never hides a
+  live classify.
 
 `must_classify` turns the hook **off** (and turns fingerprint reuse
 off) when this node has not published a classify for the CID and either:
@@ -200,8 +205,25 @@ queue is not at cap.
 
 Bytes stay in the worker. Every raw block is hashed against the CID
 before use. Optional `[fetch] ipfs_api` is tried before public
-gateways. Budget: 2 MiB (8 MiB for a small PDF), 6 child blocks, 1500
-kB/s, 16 fetchers behind the classifier slot(s).
+gateways. Budget: 2 MiB and 6 child blocks for text, `max_pdf_bytes`
+(8 MiB) for a PDF, 1500 kB/s, 16 fetchers behind the classifier
+slot(s).
+
+**Assembling a file.** The first child block is fetched alone, because
+its first bytes decide the MIME and an unprocessable file must cost one
+request. Once the MIME is known the remaining children are fetched
+`child_concurrency` (8) at a time; a block missing from one gateway is
+retried on the next before the file is given up. Gateway latency, not
+bandwidth, sets the pace, so a 30-block paper costs about four rounds
+instead of thirty.
+
+**PDFs are all-or-nothing.** A PDF keeps its cross-reference table at
+the end of the file, so a prefix extracts no text at all. A PDF that
+did not arrive whole is marked locally `incomplete` and retried after
+`skip_ttl_seconds`; it is never classified and **never gossiped**. A
+negative verdict on a partial download would replicate as a persistent
+`out_of_scope` skip and hide the paper club-wide. Text and HTML are
+sampled, so a prefix of those is still classified.
 
 ```mermaid
 flowchart TD
@@ -216,6 +238,7 @@ flowchart TD
   dir -->|no| mime{PDF / HTML / prose?}
   mime -->|no| loc["local unprocessable / remember binary"]
   mime -->|yes| fp{same text_sha256 and hook allows reuse?}
+  mime -->|"pdf, not whole"| inc["local incomplete — retry later, no gossip"]
   fp -->|yes| reuse["gossip classify reuse"]
   fp -->|no| prior{origin prior}
   prior -->|unlikely| gscope["gossip skip out_of_scope"]

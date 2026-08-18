@@ -33,7 +33,7 @@ _claimed_until = 0.0
 _clubd_down_logged = False
 _stats_lock = threading.Lock()
 _STAT_KEYS = (
-    "fetched", "mime_skips", "dir_drops", "named",
+    "fetched", "mime_skips", "dir_drops", "named", "incomplete",
     "heuristic_skips", "llm_skips", "llm_classifies", "reuse",
 )
 _run_stats = {k: 0 for k in _STAT_KEYS}
@@ -60,12 +60,12 @@ def log_summary(dropped=0):
     q = work.stats()
     log.info(
         "fetched=%d heuristic=%d llm_skip=%d classified=%d reuse=%d "
-        "mime=%d dirs=%d named=%d queue=%d dropped=%d %s",
+        "mime=%d incomplete=%d dirs=%d named=%d queue=%d dropped=%d %s",
         snap.get("fetched", 0), snap.get("heuristic_skips", 0),
         snap.get("llm_skips", 0), snap.get("llm_classifies", 0),
         snap.get("reuse", 0), snap.get("mime_skips", 0),
-        snap.get("dir_drops", 0), snap.get("named", 0),
-        q.get("backlog", 0), int(dropped or 0),
+        snap.get("incomplete", 0), snap.get("dir_drops", 0),
+        snap.get("named", 0), q.get("backlog", 0), int(dropped or 0),
         classify.backends_status(),
     )
 
@@ -151,11 +151,7 @@ def process_one(conn, row):
         kind = hit.get("kind")
         rerun = store.must_classify(cid)
         if kind == "skip" and not rerun:
-            pdf_again = (
-                (hit.get("mime_type") or "") == "application/pdf"
-                and club.is_persist_skip(hit.get("reason") or "")
-            )
-            if not pdf_again:
+            if not store.pdf_deserves_retry(hit):
                 work.mark(conn, cid, "skipped", mime_type=hit.get("mime_type"),
                           error=hit.get("reason") or "club_skip",
                           last_checked=time.time())
@@ -207,10 +203,26 @@ def process_one(conn, row):
         return False
 
     filename = result.filename
+    size = result.size if result.size is not None else len(result.data or b"")
+
+    if result.truncated and extract.needs_whole_file(
+        extract.sniff_mime(result.data[:4096], result.mime_type,
+                           filename=filename)
+    ):
+        # A PDF keeps its cross-reference table at the end of the file, so a
+        # prefix yields no usable text. Judging one would gossip a negative
+        # verdict that persists club-wide, so retry it later instead.
+        result.data = b""
+        work.mark(conn, cid, "skipped", mime_type="application/pdf", size=size,
+                  filename=filename, error="incomplete",
+                  last_checked=time.time())
+        _bump("incomplete")
+        log.debug("skip %s incomplete pdf (%d bytes)", cid[:24], size)
+        return True
+
     text, mime, license_name, _license_source = extract.extract_document(
         result.data, result.mime_type, filename=filename
     )
-    size = result.size if result.size is not None else len(result.data or b"")
     result.data = b""
 
     if not extract.processable(mime) or not extract.usable_text(text, mime):

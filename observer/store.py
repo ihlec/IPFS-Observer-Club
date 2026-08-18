@@ -252,13 +252,16 @@ def _migrate(conn):
 
 
 def _add_stat(conn, key, delta):
-    row = conn.execute(
-        "SELECT value FROM settings WHERE key = ?", (key,)
-    ).fetchone()
-    n = (int(row[0]) if row else 0) + int(delta)
+    """Adjust a cached counter in one statement.
+
+    Read-modify-write from Python let concurrent web and ingest threads lose
+    increments, which made the cached count drift permanently.
+    """
     conn.execute(
-        "INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)",
-        (key, str(n)),
+        "INSERT INTO settings(key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET "
+        "value = CAST(CAST(IFNULL(value, '0') AS INTEGER) + ? AS TEXT)",
+        (key, str(int(delta)), int(delta)),
     )
 
 
@@ -346,6 +349,23 @@ def _ensure_docs(conn):
     conn.execute("DROP TABLE IF EXISTS classifies_fts")
 
 
+def pdf_deserves_retry(hit):
+    """True when a skip on a PDF should not be trusted.
+
+    A peer may have judged the PDF from a partial download, which extracts no
+    text at all. The indexer already refetches these, so spool ingest has to
+    agree or the CID never reaches the indexer to be reconsidered.
+    """
+    from . import club
+
+    if not hit or hit.get("kind") != "skip":
+        return False
+    return (
+        (hit.get("mime_type") or "") == "application/pdf"
+        and club.is_persist_skip(hit.get("reason") or "")
+    )
+
+
 def already_catalogued(cid):
     """True when the club already has a classify or live skip for this CID."""
     try:
@@ -353,6 +373,8 @@ def already_catalogued(cid):
     except sqlite3.Error:
         return False
     if not hit or hit.get("kind") not in ("classify", "skip"):
+        return False
+    if pdf_deserves_retry(hit):
         return False
     if must_classify(cid):
         return False

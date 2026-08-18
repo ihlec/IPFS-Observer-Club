@@ -1,9 +1,12 @@
 """FTS search over the one-row-per-CID docs catalog."""
 from __future__ import annotations
 
+import logging
 import time
 
 from . import indexer, labels, store
+
+log = logging.getLogger("search")
 
 
 def _fts_escape(query):
@@ -17,11 +20,19 @@ def _fts_escape(query):
     return " ".join(terms)
 
 
-def _decorate(conn, row):
-    out = dict(row)
-    out.pop("rank", None)
-    labels.apply(out, conn, out["cid"])
-    return out
+def _decorate(conn, rows):
+    """Attach club votes to result rows in one batched lookup."""
+    out = []
+    for row in rows:
+        item = dict(row)
+        item.pop("rank", None)
+        out.append(item)
+    return labels.apply_many(conn, out)
+
+
+# docs.field is the first-seen classify, but the UI shows the club vote, so a
+# field filter has to consider every CID any publisher filed under that field.
+_FIELD_WHERE = "(%s.field = ? OR %s.cid IN (SELECT cid FROM classifies WHERE field = ?))"
 
 
 def search(query, field=None, mime=None, limit=50):
@@ -34,22 +45,18 @@ def search(query, field=None, mime=None, limit=50):
     )
     params = [_fts_escape(query)]
     if field:
-        sql += " AND d.field = ?"
-        params.append(field)
+        sql += " AND " + (_FIELD_WHERE % ("d", "d"))
+        params.extend((field, field))
     if mime:
         sql += " AND d.mime_type LIKE ?"
         params.append("%" + mime + "%")
     sql += " ORDER BY rank LIMIT ?"
-    params.append(min(int(limit) * 3 if field else int(limit), 600))
-    out = []
-    for r in conn.execute(sql, params).fetchall():
-        row = _decorate(conn, r)
-        if field and row.get("field") != field:
-            continue
-        out.append(row)
-        if len(out) >= limit:
-            break
-    return out
+    limit = int(limit)
+    params.append(min(limit * 3 if field else limit, 600))
+    rows = _decorate(conn, conn.execute(sql, params).fetchall())
+    if field:
+        rows = [r for r in rows if r.get("field") == field]
+    return rows[:limit]
 
 
 def browse(field=None, mime=None, limit=20, offset=0):
@@ -57,8 +64,8 @@ def browse(field=None, mime=None, limit=20, offset=0):
     where = "WHERE cid NOT IN (SELECT cid FROM reports WHERE reason = 'abusive')"
     params = []
     if field:
-        where += " AND field = ?"
-        params.append(field)
+        where += " AND " + (_FIELD_WHERE % ("docs", "docs"))
+        params.extend((field, field))
     if mime:
         where += " AND mime_type LIKE ?"
         params.append("%" + mime + "%")
@@ -70,19 +77,25 @@ def browse(field=None, mime=None, limit=20, offset=0):
         " ORDER BY indexed_at DESC LIMIT ? OFFSET ?",
         params + [limit, offset],
     ).fetchall()
-    results = [_decorate(conn, r) for r in rows]
-    return results, total
+    return _decorate(conn, rows), total
+
+
+def _local_peer_id():
+    from . import clubd_client
+    try:
+        return clubd_client.peer_id()
+    except Exception:
+        log.debug("clubd peer id unavailable", exc_info=True)
+        return None
 
 
 def abusive_reports():
     """CIDs hidden by an abusive report, for the admin review list."""
     conn = store.connect()
-    me = None
-    try:
-        from . import clubd_client
-        me = clubd_client.peer_id()
-    except Exception:
-        me = None
+    me = _local_peer_id()
+    blacklisted = {
+        r[0] for r in conn.execute("SELECT publisher FROM blacklisted")
+    }
     rows = conn.execute(
         "SELECT r.cid, r.publisher, r.received_at, a.alias, "
         "d.field, d.topic, d.keywords, d.mime_type, d.filename "
@@ -114,7 +127,7 @@ def abusive_reports():
             "observer": r["publisher"],
             "alias": r["alias"] or "",
             "received_at": r["received_at"],
-            "blacklisted": store.is_blacklisted(r["publisher"]),
+            "blacklisted": r["publisher"] in blacklisted,
         })
         if me and r["publisher"] == me:
             item["mine"] = True
@@ -165,12 +178,7 @@ def observers(limit=50):
         "GROUP BY c.publisher ORDER BY n DESC, c.publisher ASC LIMIT ?",
         (limit,),
     )
-    me = None
-    try:
-        from . import clubd_client
-        me = clubd_client.peer_id()
-    except Exception:
-        me = None
+    me = _local_peer_id()
     local = store.local_alias()
     out = []
     for r in rows:

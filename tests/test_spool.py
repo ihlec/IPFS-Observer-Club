@@ -63,28 +63,56 @@ def test_spool_evicts_folder_at_cap_to_admit_raw(tmp_path, monkeypatch):
     assert unixfs not in rows
 
 
-def test_spool_skips_folder_at_cap_when_raw_holds_slot(tmp_path, monkeypatch):
+def test_spool_evicts_raw_at_cap_to_admit_unixfs(tmp_path, monkeypatch):
     spool_dir = tmp_path / "spool"
     spool_dir.mkdir()
     monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
     monkeypatch.setattr(work.config, "WORK_DB", str(tmp_path / "work.sqlite"))
     monkeypatch.setattr(store.config, "DB_PATH", str(tmp_path / "club.sqlite"))
     monkeypatch.setitem(work.config.FETCH, "max_queue", 1)
+    monkeypatch.setitem(work.config.FETCH, "max_dir_queue", 40)
     work._local.conn = None
     store._local.conn = None
     now = int(time.time())
     raw = cid_for("held-raw")
-    unixfs = cid_pb_for("folder")
+    unixfs = cid_pb_for("paper-root")
     path = spool_dir / "cids-20260101-000000.jsonl"
     path.write_text("".join(
         json.dumps({"ts": now, "cid": cid, "peer": "12D3aaa"}) + "\n"
         for cid in (raw, unixfs)
     ))
-    assert spool.run_once() == 1
+    assert spool.run_once() == 2
     conn = work.connect()
     rows = {r[0]: r[1] for r in conn.execute("SELECT cid, codec FROM cids")}
-    assert raw in rows and rows[raw] == "raw"
-    assert unixfs not in rows
+    assert unixfs in rows and rows[unixfs] == "dag-pb"
+    assert raw not in rows
+
+
+def test_spool_skips_unixfs_when_dir_queue_full(tmp_path, monkeypatch):
+    spool_dir = tmp_path / "spool"
+    spool_dir.mkdir()
+    monkeypatch.setattr(spool.config, "SPOOL_DIR", str(spool_dir))
+    monkeypatch.setattr(work.config, "WORK_DB", str(tmp_path / "work.sqlite"))
+    monkeypatch.setattr(store.config, "DB_PATH", str(tmp_path / "club.sqlite"))
+    monkeypatch.setitem(work.config.FETCH, "max_queue", 3)
+    monkeypatch.setitem(work.config.FETCH, "max_dir_queue", 1)
+    work._local.conn = None
+    store._local.conn = None
+    now = int(time.time())
+    first = cid_pb_for("first")
+    second = cid_pb_for("second")
+    raw = cid_for("page")
+    path = spool_dir / "cids-20260101-000000.jsonl"
+    path.write_text("".join(
+        json.dumps({"ts": now, "cid": cid, "peer": "12D3aaa"}) + "\n"
+        for cid in (first, raw, second)
+    ))
+    assert spool.run_once() == 2
+    conn = work.connect()
+    rows = {r[0]: r[1] for r in conn.execute("SELECT cid, codec FROM cids")}
+    assert rows[first] == "dag-pb"
+    assert rows[raw] == "raw"
+    assert second not in rows
 
 
 def test_spool_skips_extra_folder_at_cap_without_holding_file(tmp_path, monkeypatch):

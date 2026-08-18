@@ -558,3 +558,135 @@ def test_wrong_report_does_not_rerun_local_classify(tmp_path, monkeypatch):
     assert called == []
     status = wconn.execute("SELECT status FROM cids WHERE cid=?", (CID,)).fetchone()[0]
     assert status == "indexed"
+
+
+def _truncated_pdf_sample(data):
+    r = _sample(data, mime=None)
+    r.truncated = True
+    r.filename = "paper.pdf"
+    return r
+
+
+def test_incomplete_pdf_is_not_classified_or_gossiped(tmp_path, monkeypatch):
+    """A prefix of a PDF has no xref, so judging it would poison the club."""
+    wconn, _club = _dbs(tmp_path, monkeypatch)
+    from tests import pdfdag
+
+    head = pdfdag.make_pdf(pages=40)[:200000]
+    calls = []
+    monkeypatch.setattr(indexer.fetch, "fetch_cid",
+                        lambda *a, **k: _truncated_pdf_sample(head))
+    monkeypatch.setattr(indexer.classify, "available", lambda: True)
+    monkeypatch.setattr(indexer.classify, "classify",
+                        lambda *a, **k: calls.append("llm"))
+    monkeypatch.setattr(indexer.clubd_client, "publish_skip",
+                        lambda *a, **k: calls.append("skip") or True)
+    monkeypatch.setattr(indexer.clubd_client, "publish_classify",
+                        lambda *a, **k: calls.append("classify") or True)
+
+    row = _discovered(wconn, codec="dag-pb")
+    assert indexer.process_one(wconn, row) is True
+    assert calls == [], "incomplete PDF must not reach the model or the club"
+    got = wconn.execute(
+        "SELECT status, error, mime_type FROM cids WHERE cid=?", (CID,),
+    ).fetchone()
+    assert got["status"] == "skipped"
+    assert got["error"] == "incomplete"
+    assert got["mime_type"] == "application/pdf"
+
+
+def test_complete_pdf_is_classified_and_published(tmp_path, monkeypatch):
+    wconn, _club = _dbs(tmp_path, monkeypatch)
+    from tests import pdfdag
+
+    whole = pdfdag.make_pdf(
+        pages=40, line="Abstract. CRISPR genome editing doi:10.1234/example",
+    )
+    published = []
+    result = _sample(whole, mime=None)
+    result.filename = "paper.pdf"
+    monkeypatch.setattr(indexer.fetch, "fetch_cid", lambda *a, **k: result)
+    monkeypatch.setattr(indexer.classify, "available", lambda: True)
+    monkeypatch.setattr(indexer.clubd_client, "publish_claim", lambda cid: True)
+    monkeypatch.setattr(indexer.classify, "classify", lambda *a, **k: {
+        "in_scope": True, "field": "biology", "topic": "crispr",
+        "keywords": "genome", "license": None,
+    })
+    monkeypatch.setattr(
+        indexer.clubd_client, "publish_classify",
+        lambda cid, **fields: published.append(fields) or True,
+    )
+
+    row = _discovered(wconn, codec="dag-pb")
+    assert indexer.process_one(wconn, row) is True
+    assert published, "a whole PDF must still be classified"
+    assert published[0]["mime_type"] == "application/pdf"
+    assert published[0]["field"] == "biology"
+
+
+def test_truncated_html_is_still_classified(tmp_path, monkeypatch):
+    """Only PDFs need the whole file; a text prefix is a valid sample."""
+    wconn, _club = _dbs(tmp_path, monkeypatch)
+    published = []
+    result = _sample(
+        b"<html><body><p>Abstract. Quantum field theory lecture notes from the "
+        b"Department of Physics. doi:10.1234/example</p></body></html>",
+        mime=None,
+    )
+    result.truncated = True
+    monkeypatch.setattr(indexer.fetch, "fetch_cid", lambda *a, **k: result)
+    monkeypatch.setattr(indexer.classify, "available", lambda: True)
+    monkeypatch.setattr(indexer.clubd_client, "publish_claim", lambda cid: True)
+    monkeypatch.setattr(indexer.classify, "classify", lambda *a, **k: {
+        "in_scope": True, "field": "physics", "topic": "qft",
+        "keywords": "quantum", "license": None,
+    })
+    monkeypatch.setattr(
+        indexer.clubd_client, "publish_classify",
+        lambda cid, **fields: published.append(fields) or True,
+    )
+
+    row = _discovered(wconn)
+    assert indexer.process_one(wconn, row) is True
+    assert published and published[0]["field"] == "physics"
+
+
+def test_scope_skipped_pdf_is_reconsidered_by_spool(tmp_path, monkeypatch):
+    """A peer's out_of_scope on a PDF may come from a partial download.
+
+    The indexer refetches those, so spool ingest must let them through or the
+    CID never gets a second look.
+    """
+    _wconn, club_conn = _dbs(tmp_path, monkeypatch)
+    store.ingest_message(club_conn, {
+        "kind": "skip", "cid": CID, "publisher": "peer",
+        "mime_type": "application/pdf", "reason": "out_of_scope", "v": 1,
+    })
+    assert store.already_catalogued(CID) is False
+
+    store.ingest_message(club_conn, {
+        "kind": "skip", "cid": CID_A, "publisher": "peer",
+        "mime_type": "text/html", "reason": "out_of_scope", "v": 1,
+    })
+    assert store.already_catalogued(CID_A) is True
+
+
+def test_scope_skipped_pdf_is_refetched_by_indexer(tmp_path, monkeypatch):
+    wconn, club_conn = _dbs(tmp_path, monkeypatch)
+    store.ingest_message(club_conn, {
+        "kind": "skip", "cid": CID, "publisher": "peer",
+        "mime_type": "application/pdf", "reason": "out_of_scope", "v": 1,
+    })
+    called = []
+
+    def _fetch(*_a, **_k):
+        called.append("fetch")
+        failed = FetchResult()
+        failed.error = "timeout"
+        failed.slow = True
+        return failed
+
+    monkeypatch.setattr(indexer.fetch, "fetch_cid", _fetch)
+    row = _discovered(wconn, codec="dag-pb")
+    indexer.process_one(wconn, row)
+    assert called == ["fetch"], "a scope-skipped PDF must get another look"

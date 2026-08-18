@@ -47,8 +47,14 @@ gateways = [
     "https://w3s.link",
 ]
 max_bytes = 2097152
+# A PDF is only readable whole (its xref table is at the end), so this is the
+# largest paper the node will assemble. Bigger ones are left alone.
 max_pdf_bytes = 8388608
+# Child-block cap for text samples. PDFs use max_pdf_bytes instead.
 max_child_blocks = 6
+# Child blocks fetched in parallel per file. Gateway latency, not bandwidth,
+# is the limit; a 30-block paper is ~4 rounds instead of 30.
+child_concurrency = 8
 timeout_seconds = 6
 connect_timeout_seconds = 5
 request_timeout_seconds = 6
