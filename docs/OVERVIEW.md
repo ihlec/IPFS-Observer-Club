@@ -25,9 +25,11 @@ classify path, labels, reports, and catch-up. Defaults below are from
 ## Processes
 
 `make start` launches **clubd**, then **observer**. Observer keeps the
-**sniffer** running. When the live work queue is at cap
-(`fetch.max_queue` = 400), spool ingest skips new raw WANTs and evicts
-raw to admit `dag-pb`; Bitswap peers stay connected.
+**sniffer** running. Spool ingest holds sniffed raw until
+`prefer_min_peer_count` (2) peers want the same CID — those
+single-peer leaves are usually Bitswap chunks, not document roots. At
+cap (`fetch.max_queue` = 400) it evicts remaining raw to admit
+`dag-pb`; Bitswap peers stay connected.
 
 ```mermaid
 flowchart LR
@@ -147,20 +149,24 @@ Sniffer writes `{cid, peer, ts}` lines. Spool ingest:
 - drops CIDs this node already marked locally unprocessable
 - at cap, **evicts raw** to admit UnixFS `dag-pb` (PDF file roots)
   until `max_dir_queue` (40) unfetched dag-pb sit on the queue; extra
-  folders are skipped. **Evicts folders** to admit raw HTML. Named
-  PDFs still evict raw if needed.
-- counts distinct peers per CID; prefers `prefer_min_peer_count` (2),
-  falls back to `min_peer_count` (1)
+  folders are skipped. **Evicts folders** to admit raw that already
+  has `prefer_min_peer_count` peers. Named PDFs still evict raw if
+  needed.
+- counts distinct peers per CID. Sniffed **raw** only enters the live
+  queue at `prefer_min_peer_count` (2); `dag-pb` roots, named PDFs, and
+  reports still fetch at `min_peer_count` (1). Peer rows are kept so a
+  later WANT can promote a held CID.
 
 Workers take **named PDFs, then HTML, then at most `max_dir_probes`
-(4) sniffed folders, then raw**. A `source=report` row (second vote or
-a `wrong` report) or `source=named` (PDF from a dropped folder)
-survives prune/age.
+(4) sniffed folders, then raw with enough peers**. A `source=report`
+row (second vote or a `wrong` report) or `source=named` (PDF from a
+dropped folder) survives prune/age.
 
-Prune drops sniffed rows older than `max_age_seconds` (900). Cap is
-400 live `discovered`/`processing` rows. At most `max_dir_queue` (40)
-sniffed folders sit on that queue. Folders are forgotten after fetch
-via `drop_directory`. Gateway fetches give up after 6s.
+Prune drops sniffed rows older than `max_age_seconds` (900) and sniffed
+raw below `prefer_min_peer_count`. Cap is 400 live
+`discovered`/`processing` rows. At most `max_dir_queue` (40) sniffed
+folders sit on that queue. Folders are forgotten after fetch via
+`drop_directory`. Gateway fetches give up after 6s.
 
 ## Skip-hook
 

@@ -14,11 +14,11 @@ def _conn(tmp_path, monkeypatch, max_queue=80, max_age=900):
     return work.connect()
 
 
-def _insert(conn, cid, last_seen, status="discovered"):
+def _insert(conn, cid, last_seen, status="discovered", codec="dag-pb"):
     conn.execute(
         "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
         "want_count, status, attempts) VALUES (?,?,?,?,1,1,?,0)",
-        (cid, "raw", last_seen, last_seen, status),
+        (cid, codec, last_seen, last_seen, status),
     )
     conn.commit()
 
@@ -49,7 +49,7 @@ def test_prune_evicts_folders_before_raw(tmp_path, monkeypatch):
     now = time.time()
     conn.execute(
         "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
-        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        "want_count, status, attempts) VALUES (?,?,?,?,2,2,'discovered',0)",
         ("bafy-raw", "raw", now - 5, now - 5),
     )
     conn.execute(
@@ -80,6 +80,45 @@ def test_take_batch_includes_sniffed_dag_pb(tmp_path, monkeypatch):
     monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 1)
     rows = work.take_batch(conn, limit=5)
     assert [r["cid"] for r in rows] == ["bafy-pb", "bafy-raw"]
+
+
+def test_take_batch_skips_lonely_raw(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_age=3600)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-raw", "raw", now - 20, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-pb", "dag-pb", now - 20, now - 10),
+    )
+    conn.commit()
+    monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 2)
+    rows = work.take_batch(conn, limit=5)
+    assert [r["cid"] for r in rows] == ["bafy-pb"]
+
+
+def test_prune_drops_lonely_raw_keeps_peers(tmp_path, monkeypatch):
+    conn = _conn(tmp_path, monkeypatch, max_age=3600)
+    monkeypatch.setitem(work.config.FETCH, "prefer_min_peer_count", 2)
+    now = time.time()
+    conn.execute(
+        "INSERT INTO cids(cid, codec, first_seen, last_seen, peer_count, "
+        "want_count, status, attempts) VALUES (?,?,?,?,1,1,'discovered',0)",
+        ("bafy-raw", "raw", now - 5, now - 5),
+    )
+    conn.execute(
+        "INSERT INTO cid_peers(cid, peer) VALUES ('bafy-raw', '12D3aaa')"
+    )
+    conn.commit()
+    assert work.prune(conn) == 1
+    assert conn.execute("SELECT COUNT(*) FROM cids").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM cid_peers WHERE cid = 'bafy-raw'"
+    ).fetchone()[0] == 1
 
 
 def test_take_batch_prefers_unixfs_over_popular_raw(tmp_path, monkeypatch):

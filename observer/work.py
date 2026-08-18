@@ -270,6 +270,28 @@ def enqueue_doc_children(links, skip_cid=None):
     return n
 
 
+def drop_lonely_raw(conn=None):
+    """Drop sniffed raw with too few peers. Keep cid_peers so a later WANT can promote."""
+    conn = conn or connect()
+    need = prefer_min_peer_count()
+    if need <= 1:
+        return 0
+    dropped = 0
+    with _db_lock:
+        rows = conn.execute(
+            "SELECT cid FROM cids WHERE status = 'discovered' "
+            "AND NOT " + _KEEP_SRC + " "
+            "AND IFNULL(codec, '') != 'dag-pb' "
+            "AND lower(IFNULL(filename,'')) NOT LIKE '%.pdf' "
+            "AND IFNULL(peer_count, 0) < ?",
+            (need,),
+        ).fetchall()
+        for row in rows:
+            conn.execute("DELETE FROM cids WHERE cid = ?", (row[0],))
+            dropped += 1
+    return dropped
+
+
 def drop_named_non_pdf(conn=None):
     """Forget named HTML so Wikipedia dumps cannot fill the PDF cap."""
     conn = conn or connect()
@@ -303,7 +325,7 @@ def prefer_min_peer_count():
 
 
 def max_dir_queue():
-    """Live unidentified dag-pb roots. Extra slots stay free for raw HTML."""
+    """Live unidentified dag-pb roots. Extra slots stay free for popular raw."""
     return int(config.FETCH.get("max_dir_queue", 40))
 
 
@@ -316,6 +338,7 @@ def prune(conn=None):
     dropped = 0
     with _db_lock:
         dropped += drop_named_non_pdf(conn)
+        dropped += drop_lonely_raw(conn)
         stale = conn.execute(
             "SELECT cid FROM cids WHERE status IN ('discovered', 'processing') "
             "AND NOT " + _KEEP_SRC + " "
@@ -362,6 +385,7 @@ def prune(conn=None):
                     forget_cid(conn, row[0])
                     dropped += 1
         n = expire_local_skips(conn)
+        dropped += drop_lonely_raw(conn)
     return dropped + n
 
 
@@ -532,7 +556,7 @@ def _extend(rows, extra):
 
 
 def take_batch(conn, limit=5):
-    """Claim work. At most max_dir_probes sniffed folders in flight."""
+    """Claim work. Named/report and dag-pb first; sniffed raw only if popular."""
     now = time.time()
     max_first_seen = now - int(config.FETCH.get("min_age_seconds", 10))
     min_last_seen = now - max_age_seconds()
@@ -557,10 +581,6 @@ def take_batch(conn, limit=5):
         if len(rows) < limit:
             need = limit - len(rows)
             extra = _select_discovered(conn, _FILL_SQL, prefer, *args, need)
-            if not extra:
-                extra = _select_discovered(
-                    conn, _FILL_SQL, min_peers, *args, need,
-                )
             _extend(rows, extra)
         if rows:
             conn.executemany(

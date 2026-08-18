@@ -45,19 +45,6 @@ def _record(conn, line):
     if work.is_unprocessable(cid):
         return 0, 1
 
-    queued = conn.execute("SELECT 1 FROM cids WHERE cid = ?", (cid,)).fetchone()
-    if queued is None:
-        if codec == "dag-pb":
-            # UnixFS PDFs are dag-pb. Cap unfetched dag-pb, but still evict
-            # raw to admit a file root. Skip only when that cap is full.
-            if work.dir_queue_count(conn) >= work.max_dir_queue():
-                return 0, 1
-            if work.at_cap(conn) and not work.evict_for_unixfs(conn):
-                return 0, 1
-        elif work.at_cap(conn):
-            if not work.evict_dir_probes(conn):
-                return 0, 1
-
     conn.execute(
         "INSERT OR IGNORE INTO seen_cids(cid, first_seen) VALUES (?, ?)",
         (cid, ts),
@@ -78,24 +65,44 @@ def _record(conn, line):
             return 0, 1
         conn.execute("DELETE FROM evicted WHERE cid = ?", (cid,))
 
-    now = time.time()
-    conn.execute(
-        "INSERT INTO cids (cid, codec, first_seen, last_seen, want_count) "
-        "VALUES (?, ?, ?, ?, 1) "
-        "ON CONFLICT(cid) DO UPDATE SET "
-        "  last_seen = MAX(last_seen, excluded.last_seen), "
-        "  want_count = want_count + 1",
-        (cid, codec, ts, now),
-    )
     conn.execute(
         "INSERT OR IGNORE INTO cid_peers(cid, peer) VALUES (?, ?)",
         (cid, peer),
     )
+    peer_n = conn.execute(
+        "SELECT COUNT(*) FROM cid_peers WHERE cid = ?", (cid,),
+    ).fetchone()[0]
+    now = time.time()
+    queued = conn.execute("SELECT 1 FROM cids WHERE cid = ?", (cid,)).fetchone()
+    if queued is not None:
+        conn.execute(
+            "UPDATE cids SET last_seen = MAX(last_seen, ?), "
+            "want_count = want_count + 1, peer_count = ? WHERE cid = ?",
+            (now, peer_n, cid),
+        )
+        return 1, 0
+
+    # Raw Bitswap leaves are usually chunks of a private transfer, not
+    # document roots. Hold the peer until another peer wants the same CID,
+    # a directory names it, or prefer_min_peer_count is 1.
+    if codec != "dag-pb" and peer_n < work.prefer_min_peer_count():
+        return 0, 1
+
+    if codec == "dag-pb":
+        # UnixFS PDFs are dag-pb. Cap unfetched dag-pb, but still evict
+        # raw to admit a file root. Skip only when that cap is full.
+        if work.dir_queue_count(conn) >= work.max_dir_queue():
+            return 0, 1
+        if work.at_cap(conn) and not work.evict_for_unixfs(conn):
+            return 0, 1
+    elif work.at_cap(conn):
+        if not work.evict_dir_probes(conn):
+            return 0, 1
+
     conn.execute(
-        "UPDATE cids SET peer_count = "
-        "(SELECT COUNT(*) FROM cid_peers WHERE cid_peers.cid = cids.cid) "
-        "WHERE cid = ?",
-        (cid,),
+        "INSERT INTO cids (cid, codec, first_seen, last_seen, "
+        "want_count, peer_count) VALUES (?, ?, ?, ?, ?, ?)",
+        (cid, codec, ts, now, peer_n, peer_n),
     )
     return 1, 0
 
@@ -112,7 +119,7 @@ def ingest_file(conn, path, final=False):
     """Import one spool file. Commits in small batches so workers are not blocked.
 
     Extra sniffed folders above max_dir_queue are skipped so later
-    raw WANTs can still enter. UnixFS file roots still evict raw.
+    popular raw WANTs can still enter. UnixFS file roots still evict raw.
     """
     inserted = skipped = 0
     paused = False

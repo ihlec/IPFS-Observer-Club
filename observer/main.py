@@ -2,7 +2,7 @@
 
 clubd (Go) is a sibling process started by the Makefile so libp2p can
 crash-restart independently of Python. The Bitswap sniffer stays up;
-the work queue refuses extra raw WANTs when it is at cap.
+the work queue holds sniffed raw until a second peer wants the same CID.
 """
 import logging
 import resource
